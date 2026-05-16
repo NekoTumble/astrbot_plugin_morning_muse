@@ -334,6 +334,20 @@ class MorningMusePlugin(Star):
         reply = await cmd.cmd_report(event.message_str, event)
         yield event.plain_result(reply)
 
+    @filter.command_group("风格", desc="管理与日程生成相关的风格设定")
+    def style_group(self):
+        pass
+
+    @style_group.command("绑定", desc="为指定人格绑定穿搭/语气风格描述")
+    async def bind_style(self, event: AstrMessageEvent):
+        if not self._ready:
+            yield event.plain_result("✅ 插件仍在初始化，请稍后重试～")
+            return
+        cmd = PersonaCommands(self.persona_map, self.dynamic_styles, self)
+        reply = await cmd.cmd_bind_style(event.message_str, event)
+        await self._save_dynamic_data()
+        yield event.plain_result(reply)
+
     @filter.on_llm_request(desc="在LLM请求前注入当前人格的今日AI日程（穿搭+活动安排）到系统提示词")
     async def inject_schedule(self, event: AstrMessageEvent, req: ProviderRequest):
         if not self._ready:
