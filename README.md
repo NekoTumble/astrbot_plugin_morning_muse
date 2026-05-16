@@ -3,6 +3,8 @@
 **每日 AI 风格化日程生成，人格隔离，一键注入。**  
 让每一个清晨都有独特的仪式感，让 AI 记住你的每一个身份。
 
+📦 **仓库地址**：[https://github.com/NekoTumble/astrbot_plugin_morning_muse](https://github.com/NekoTumble/astrbot_plugin_morning_muse)
+
 ---
 
 ## ✨ 核心特性

@@ -3,6 +3,8 @@ display_name: 晨光心语
 author: NekoTumble
 version: 1.0.0
 description: 每日 AI 风格化日程生成，人格隔离，一键注入。
+homepage: https://github.com/NekoTumble/astrbot_plugin_morning_muse
+repository: https://github.com/NekoTumble/astrbot_plugin_morning_muse
 astrbot_version: ">=4.24.0"
 support_platforms:
   - aiocqhttp
