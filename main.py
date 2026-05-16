@@ -119,6 +119,18 @@ class MorningMusePlugin(Star):
         await asyncio.sleep(10)  # 避开启动高峰
         
         try:
+            # --- 以设置页设定的时间为"一天的起点" ---
+            schedule_time = self.get_config("schedule.schedule_time", "08:00")
+            try:
+                hour, minute = map(int, schedule_time.split(":"))
+                now = datetime.datetime.now()
+                day_start = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if now < day_start:
+                    logger.info(f"[晨光心语] ⏰ 当前时间 {now.strftime('%H:%M')} 未到每日起点 {schedule_time}，跳过后台补齐，等待定时任务触发")
+                    return
+            except Exception:
+                pass  # 配置解析失败时正常补齐，不阻塞
+            
             all_personas = await self._get_active_persona_ids()
             if not all_personas:
                 return
