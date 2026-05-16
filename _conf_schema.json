@@ -1,0 +1,177 @@
+{
+  "schedule": {
+    "description": "⏰ 日程生成",
+    "type": "object",
+    "items": {
+      "schedule_time": {
+        "description": "每天几点自动生成日程",
+        "hint": "填时间，比如 08:00。到点了会自动帮默认人格生成一份当天日程。",
+        "type": "string",
+        "default": "08:00"
+      },
+      "schedule_model": {
+        "description": "用哪个模型生成日程",
+        "hint": "填你在 AstrBot 里配过的模型名字，比如「硅基」。留空就用系统默认模型。",
+        "type": "string",
+        "default": ""
+      }
+    }
+  },
+  "persona_styles": {
+    "description": "👤 人格风格绑定（静态配置）",
+    "hint": "给最多3个人格预设风格提示词。没主动设定人格的会话会自动用 default 分组。",
+    "type": "object",
+    "items": {
+      "persona_name_1": {
+        "description": "第一个人格的名字",
+        "type": "string",
+        "default": ""
+      },
+      "style_control_1": {
+        "description": "第一个人格的风格提示词",
+        "hint": "描述这个人格说话的风格，比如「用温柔的语气说话」。留空就是没有额外风格。",
+        "type": "text",
+        "default": ""
+      },
+      "persona_name_2": {
+        "description": "第二个人格的名字",
+        "type": "string",
+        "default": ""
+      },
+      "style_control_2": {
+        "description": "第二个人格的风格提示词",
+        "type": "text",
+        "default": ""
+      },
+      "persona_name_3": {
+        "description": "第三个人格的名字",
+        "type": "string",
+        "default": ""
+      },
+      "style_control_3": {
+        "description": "第三个人格的风格提示词",
+        "type": "text",
+        "default": ""
+      },
+      "style_control_default": {
+        "description": "默认风格（兜底）",
+        "hint": "上面三个人格都没匹配到时，就用这个风格。留空则不启用任何风格化。",
+        "type": "text",
+        "default": "自然亲切的语气"
+      }
+    }
+  },
+  "context": {
+    "description": "📜 上下文参考",
+    "type": "object",
+    "items": {
+      "reference_history_days": {
+        "description": "参考前几天的日程",
+        "hint": "生成新日程时，会看看前几天的安排，避免重复。调大数字会让日程更稳定，调小则更多变。",
+        "type": "int",
+        "slider": {
+          "min": 1,
+          "max": 30,
+          "step": 1
+        },
+        "default": 3
+      },
+      "reference_recent_count": {
+        "description": "参考最近多少条聊天记录",
+        "hint": "生成日程时，会抓取最近的聊天内容作为灵感。0 表示不参考。",
+        "type": "int",
+        "slider": {
+          "min": 0,
+          "max": 50,
+          "step": 1
+        },
+        "default": 5
+      }
+    }
+  },
+  "daily_themes": {
+    "description": "🌅 今日主题池",
+    "hint": "每天随机抽一个当今日主题。按回车添加新条目。",
+    "type": "list",
+    "default": [
+      "探索日",
+      "社交日",
+      "宅家日",
+      "工作日",
+      "自我提升日",
+      "休闲放松日",
+      "创意日",
+      "运动日",
+      "整理日",
+      "美食日",
+      "文艺日",
+      "随性漫游日"
+    ]
+  },
+  "mood_colors": {
+    "description": "🌈 心情色彩池",
+    "hint": "每天随机抽一个心情色彩，会影响穿搭描述的氛围。",
+    "type": "list",
+    "default": [
+      "暖橙",
+      "薄荷绿",
+      "天空蓝",
+      "浅紫",
+      "樱花粉",
+      "奶油黄",
+      "雾霾蓝",
+      "珊瑚橘",
+      "奶茶棕",
+      "薰衣草紫",
+      "抹茶绿",
+      "蜜桃粉"
+    ]
+  },
+  "outfit_styles": {
+    "description": "👗 穿搭风格池",
+    "hint": "每天随机抽一个穿搭风格，LLM 会参考这个方向生成，但最终穿搭会融合人格本身的偏好。",
+    "type": "list",
+    "default": [
+      "知性学院风",
+      "街头休闲风",
+      "温柔淑女风",
+      "酷飒中性风",
+      "慵懒居家风",
+      "精致约会风",
+      "运动活力风",
+      "日系森女风",
+      "法式优雅风",
+      "韩系甜美风",
+      "复古文艺风",
+      "极简都市风",
+      "甜酷混搭风",
+      "民族风情风",
+      "暗黑系风格"
+    ]
+  },
+  "schedule_types": {
+    "description": "🗂️ 日程类型池",
+    "hint": "每天随机抽一个日程类型，影响当天活动的整体方向。",
+    "type": "list",
+    "default": [
+      "户外活动型",
+      "社交聚会型",
+      "独处充电型",
+      "技能学习型",
+      "随性漫游型",
+      "家务整理型",
+      "工作专注型",
+      "休闲娱乐型",
+      "健身运动型",
+      "美食探索型",
+      "文化艺术型",
+      "购物采买型"
+    ]
+  },
+  "prompt_template": {
+    "description": "📝 提示词模板",
+    "hint": "发给大模型的完整指令，用 { } 括起来的部分会被自动替换成实际内容。可以自己改，但别删掉大括号里的名字。\n- {date_str}：日期，如 2026年5月15日\n- {weekday}：星期几\n- {holiday}：今天是不是节假日\n- {persona_desc}：当前人格与风格描述\n- {persona_prompt}：当前人格在AstrBot中的完整设定（自动从聊天记录推断）\n- {daily_theme}：今日主题（从主题池随机抽的）\n- {mood_color}：心情色彩（从色彩池随机抽的）\n- {outfit_style}：穿搭风格（从穿搭池随机抽的）\n- {schedule_type}：日程类型（从类型池随机抽的）\n- {history_schedules}：最近几天的历史日程，用来避免重复\n- {recent_chats}：最近的聊天记录",
+    "type": "text",
+    "default": "# Role: Life Scheduler\n请根据以下信息，为自己规划一份今天的生活安排。\n\n## Context\n- 日期：{date_str} {weekday} {holiday}\n- 人设：{persona_desc}\n- 人格参考：{persona_prompt}\n\n## 🎲 今日创意约束（必须遵循）\n- 今日主题：【{daily_theme}】\n- 心情色彩：【{mood_color}】\n- 穿搭风格（建议融合方向）：【{outfit_style}】\n- 日程类型：【{schedule_type}】\n\n## 🚫 需要避免的重复内容\n{history_schedules}\n\n## 💡 参考信息\n{recent_chats}\n\n## 强制约束（按优先级从高到低执行）\n\n### 1. 人格核心身份（最高优先级）\n你的人格设定由 `{persona_prompt}` 完整定义。  \n**该身份必须贯穿所有输出**：包括穿搭偏好、日常习惯、说话语气、情感反应、活动选择。  \n**当任何其他约束与此冲突时，优先保留人格身份特征**（而不是生硬地替换或忽略）。\n\n### 2. 当日主题与穿搭风格（第二优先级）\n- 今日主题：【{daily_theme}】  \n- 穿搭风格（建议方向）：【{outfit_style}】  \n\n**处理冲突的规则（模拟人类思考）**：\n- 如果 `{outfit_style}` 与人格偏好（来自 `{persona_prompt}`）不矛盾 → 直接融合（例如：人格喜欢复古风 + 运动主题 = 复古运动套装）。\n- 如果 `{outfit_style}` 与人格偏好明显冲突（例如人格喜欢洛丽塔，但主题要求\"商务正装\"） → **依然保留人格偏好的核心元素**（颜色/版型/标志性配饰等），仅在局部适应主题（换一件单品或加一件外套）。\n- 允许角色在内心吐槽\"为什么今天的主题是这个\"，但实际穿搭必须让读者能识别出人格偏好的延续。\n- **输出字段 `outfit_style` 的值必须等于原样给定的 {outfit_style}**（不要改写），但 `outfit` 描述中的实际风格可以是在人格偏好基础上的合理融合。\n\n### 3. 日程类型与活动安排（第三优先级）\n- 日程类型：【{schedule_type}】  \n- 活动内容需符合日程类型，但人格的情感反应优先（例如：人格讨厌运动，即使日程类型是\"健身日\"也要写出抱怨和傲娇心理）。\n\n### 4. 避免重复内容\n{history_schedules}\n\n### 5. 参考信息\n{recent_chats}\n\n## 输出格式要求（严格遵循）\n- 你必须只输出 **JSON 对象本体**（不要 Markdown 代码块标记，不要额外解释）。\n- JSON 必须包含字段：\n  - `\"outfit_style\"`: 值必须严格等于给定的 {outfit_style}\n  - `\"outfit\"`: 今日穿搭描述（从里到外、从上到下、衣裤内衣裤鞋袜、饰品等），**第一行必须以\"风格：{outfit_style}\"开头**，但后续描述必须体现人格偏好与主题的融合。\n  - `\"schedule\"`: 数组，每个元素包含 `\"time\"` 和 `\"activity\"`。`time` 使用模糊时段（清晨/上午/午间/下午/傍晚/晚间），不要写具体时间点。\n  - `\"note\"`: 一段生活感悟或今日寄语，一两句中文，语气必须完全符合人格设定（从 `{persona_prompt}` 提取）。\n\n## 开始生成\n请按照以上约束，输出今日的 JSON 日程。"
+  }
+}
