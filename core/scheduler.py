@@ -38,7 +38,7 @@ class MorningScheduler:
         tasks = []
         for pid in all_personas:
             cached = self.plugin.chat_cache.get(pid) if self.plugin.chat_cache else []
-            tasks.append(self.generator.generate(pid, dynamic_styles={}, recent_messages=cached, force=False))
+            tasks.append(self.generator.generate(pid, dynamic_styles={}, recent_messages=cached, force=True))
         results = await asyncio.gather(*tasks, return_exceptions=True)
         success_count = sum(1 for r in results if r and not isinstance(r, Exception))
         logger.info(f"定时批量生成完成：{success_count}/{len(tasks)} 成功")
