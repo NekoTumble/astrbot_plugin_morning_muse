@@ -119,45 +119,27 @@ class MorningMusePlugin(Star):
         await asyncio.sleep(10)  # 避开启动高峰
         
         try:
-            # --- 以设置页设定的时间为"一天的起点" ---
-            schedule_time = self.get_config("schedule.schedule_time", "08:00")
-            try:
-                hour, minute = map(int, schedule_time.split(":"))
-                now = datetime.datetime.now()
-                day_start = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                if now < day_start:
-                    logger.info(f"[晨光心语] ⏰ 当前时间 {now.strftime('%H:%M')} 未到每日起点 {schedule_time}，跳过后台补齐，等待定时任务触发")
-                    return
-            except Exception:
-                pass  # 配置解析失败时正常补齐，不阻塞
-            
             all_personas = await self._get_active_persona_ids()
             if not all_personas:
                 return
             
             today = datetime.date.today()
+            yesterday = today - datetime.timedelta(days=1)
             tasks = []
             for pid in all_personas:
                 existing = await self.storage.load_schedule(pid, today)
                 if existing:
-                    # 检查日程文件生成时间
-                    file_path = self.storage._get_path(pid, today)
-                    if file_path.exists():
-                        mtime = file_path.stat().st_mtime
-                        file_time = datetime.datetime.fromtimestamp(mtime)
-                        if file_time < day_start:
-                            # 日程生成时间早于每日起点，这是旧日程，重新生成
-                            logger.info(f"[晨光心语] 🔄 {pid} 日程生成于 {file_time.strftime('%H:%M:%S')}，早于每日起点 {schedule_time}，重新生成")
-                            cached = self.chat_cache.get(pid) if self.chat_cache else []
-                            tasks.append(self.generator.generate(pid, self.dynamic_styles, recent_messages=cached, force=True))
-                        else:
-                            logger.info(f"[晨光心语] 📅 {pid} 今日日程已存在（{file_time.strftime('%H:%M:%S')} 生成），跳过")
-                    else:
-                        logger.info(f"[晨光心语] 📅 {pid} 今日日程已存在，跳过")
+                    logger.info(f"[晨光心语] 📅 {pid} 今日日程已存在，跳过")
                 else:
-                    logger.info(f"[晨光心语] 🆕 后台补齐 {pid} 的今日日程...")
-                    cached = self.chat_cache.get(pid) if self.chat_cache else []
-                    tasks.append(self.generator.generate(pid, self.dynamic_styles, recent_messages=cached, force=False))
+                    # 今天没有，检查昨天有没有（区分新老用户）
+                    yesterday_schedule = await self.storage.load_schedule(pid, yesterday)
+                    if yesterday_schedule:
+                        # 老用户：昨天有日程，说明是正常过渡，等08:00定时任务
+                        logger.info(f"[晨光心语] ⏰ {pid} 今日日程尚未生成（昨日日程存在），等待定时任务触发")
+                    else:
+                        # 新用户：昨天也没有日程，说明是新安装，直接生成首日日程
+                        logger.info(f"[晨光心语] 🆕 新用户 {pid}，自动生成首日日程...")
+                        tasks.append(self.generator.generate(pid, self.dynamic_styles, recent_messages=[], force=False))
             
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -369,29 +351,22 @@ class MorningMusePlugin(Star):
         today = datetime.date.today()
         schedule = await self.storage.load_schedule(persona_id, today)
         if not schedule:
-            # ⏰ 检查是否到了每日起点时间，避免凌晨就提前生成
-            schedule_time = self.get_config("schedule.schedule_time", "08:00")
-            should_generate = True
-            try:
-                hour, minute = map(int, schedule_time.split(":"))
-                now = datetime.datetime.now()
-                day_start = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                if now < day_start:
-                    logger.info(f"[晨光心语] ⏰ 注入时当前时间 {now.strftime('%H:%M')} 未到每日起点 {schedule_time}，不自动生成，等待定时任务")
-                    should_generate = False
-            except Exception:
-                pass  # 配置解析失败时仍尝试生成，不阻塞
-
-            if should_generate:
+            # 今天没有，检查昨天有没有（区分新老用户）
+            yesterday = today - datetime.timedelta(days=1)
+            yesterday_schedule = await self.storage.load_schedule(persona_id, yesterday)
+            if not yesterday_schedule:
+                # 今天也没有昨天也没有 → 新安装用户，直接生成首日日程
                 try:
                     recent = await self._get_recent_messages(event)
-                    # 更新该人格的聊天记录缓存
                     if self.chat_cache:
                         self.chat_cache.update(persona_id, recent)
                         await self.chat_cache.save()
                     schedule = await self.generator.generate(persona_id, self.dynamic_styles, recent_messages=recent)
                 except Exception as e:
                     logger.error(f"注入时生成日程失败: {e}")
+            else:
+                # 昨天有 → 老用户，等定时任务
+                logger.info(f"[晨光心语] ⏰ {persona_id} 注入时今日日程尚未生成（昨日日程存在），等待定时任务触发")
         if schedule:
             injection = self._format_for_injection(schedule)
             if req.system_prompt:
