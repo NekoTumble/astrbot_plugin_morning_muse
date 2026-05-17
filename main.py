@@ -371,25 +371,27 @@ class MorningMusePlugin(Star):
         if not schedule:
             # ⏰ 检查是否到了每日起点时间，避免凌晨就提前生成
             schedule_time = self.get_config("schedule.schedule_time", "08:00")
+            should_generate = True
             try:
                 hour, minute = map(int, schedule_time.split(":"))
                 now = datetime.datetime.now()
                 day_start = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 if now < day_start:
                     logger.info(f"[晨光心语] ⏰ 注入时当前时间 {now.strftime('%H:%M')} 未到每日起点 {schedule_time}，不自动生成，等待定时任务")
-                    return
+                    should_generate = False
             except Exception:
                 pass  # 配置解析失败时仍尝试生成，不阻塞
 
-            try:
-                recent = await self._get_recent_messages(event)
-                # 更新该人格的聊天记录缓存
-                if self.chat_cache:
-                    self.chat_cache.update(persona_id, recent)
-                    await self.chat_cache.save()
-                schedule = await self.generator.generate(persona_id, self.dynamic_styles, recent_messages=recent)
-            except Exception as e:
-                logger.error(f"注入时生成日程失败: {e}")
+            if should_generate:
+                try:
+                    recent = await self._get_recent_messages(event)
+                    # 更新该人格的聊天记录缓存
+                    if self.chat_cache:
+                        self.chat_cache.update(persona_id, recent)
+                        await self.chat_cache.save()
+                    schedule = await self.generator.generate(persona_id, self.dynamic_styles, recent_messages=recent)
+                except Exception as e:
+                    logger.error(f"注入时生成日程失败: {e}")
         if schedule:
             injection = self._format_for_injection(schedule)
             if req.system_prompt:
