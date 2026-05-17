@@ -140,7 +140,20 @@ class MorningMusePlugin(Star):
             for pid in all_personas:
                 existing = await self.storage.load_schedule(pid, today)
                 if existing:
-                    logger.info(f"[晨光心语] 📅 {pid} 今日日程已存在，跳过")
+                    # 检查日程文件生成时间
+                    file_path = self.storage._get_path(pid, today)
+                    if file_path.exists():
+                        mtime = file_path.stat().st_mtime
+                        file_time = datetime.datetime.fromtimestamp(mtime)
+                        if file_time < day_start:
+                            # 日程生成时间早于每日起点，这是旧日程，重新生成
+                            logger.info(f"[晨光心语] 🔄 {pid} 日程生成于 {file_time.strftime('%H:%M:%S')}，早于每日起点 {schedule_time}，重新生成")
+                            cached = self.chat_cache.get(pid) if self.chat_cache else []
+                            tasks.append(self.generator.generate(pid, self.dynamic_styles, recent_messages=cached, force=True))
+                        else:
+                            logger.info(f"[晨光心语] 📅 {pid} 今日日程已存在（{file_time.strftime('%H:%M:%S')} 生成），跳过")
+                    else:
+                        logger.info(f"[晨光心语] 📅 {pid} 今日日程已存在，跳过")
                 else:
                     logger.info(f"[晨光心语] 🆕 后台补齐 {pid} 的今日日程...")
                     cached = self.chat_cache.get(pid) if self.chat_cache else []
