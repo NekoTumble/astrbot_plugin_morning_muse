@@ -76,7 +76,7 @@ class MorningMusePlugin(Star):
         self._ready = False
         self.chat_cache: Optional[ChatHistoryCache] = None
         
-        asyncio.ensure_future(self._async_init())
+        asyncio.create_task(self._async_init())
 
     async def _async_init(self):
         try:

@@ -90,7 +90,7 @@ class ContextBuilder:
             logger.error(f"[晨光心语] 获取人格提示词异常: {e}")
             return ""
 
-    async def build_context(self, persona_id: str, dynamic_styles: Dict[str, str],
+    async def build_context(self, persona_id: str,
                             recent_messages: List[str] = None) -> Dict[str, Any]:
         today = date.today()
         style = self.plugin.get_style_for_persona(persona_id)

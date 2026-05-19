@@ -149,22 +149,6 @@ class PersonaCommands:
         self.dynamic_styles = dynamic_styles
         self.plugin = plugin
 
-    async def cmd_set_persona(self, message, event):
-        session_id = event.message_obj.session_id
-        if not session_id:
-            return "无法获取会话ID"
-        cmd_text = message.strip()
-        if not cmd_text.startswith('/'):
-            cmd_text = '/' + cmd_text
-        match = re.match(r'/人格\s+设定\s+(.+)', cmd_text)
-        if not match:
-            return "格式：/人格 设定 <人格名>"
-        name = match.group(1).strip()
-        if not name:
-            return "人格名不能为空"
-        self.persona_map[session_id] = name
-        return f"当前会话的人格已设置为【{name}】"
-
     async def cmd_bind_style(self, message, event):
         cmd_text = message.strip()
         if not cmd_text.startswith('/'):

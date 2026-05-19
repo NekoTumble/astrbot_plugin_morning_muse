@@ -81,7 +81,7 @@ class ScheduleGenerator:
                 return existing
 
         try:
-            context = await self.context_builder.build_context(persona_id, dynamic_styles, recent_messages)
+            context = await self.context_builder.build_context(persona_id, recent_messages)
         except Exception as e:
             self._add_log("error", f"构建上下文失败: {e}")
             return None
