@@ -25,7 +25,8 @@ class ScheduleCommands:
             if yesterday_schedule:
                 # 老用户：展示昨天的日程，提示今天日程将在08:00生成
                 yesterday_text = self._format_schedule(yesterday_schedule)
-                return (f"今天的日程将在08:00生成，先看看昨天的日程吧喵～"
+                sched_time = self.plugin.get_config("schedule.schedule_time", "08:00")
+                return (f"今天的日程将在{sched_time}生成，先看看昨天的日程吧喵～"
                         f"\n\n"
                         f"【昨天 {yesterday.strftime('%m/%d')} 的日程】"
                         f"\n"
