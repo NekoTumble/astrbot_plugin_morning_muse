@@ -10,9 +10,10 @@
         "default": "08:00"
       },
       "schedule_model": {
-        "description": "用哪个模型生成日程",
-        "hint": "填你在 AstrBot 里配过的模型名字，比如「硅基」。留空就用系统默认模型。",
+        "description": "用哪个 Provider 生成日程",
+        "hint": "选择一个 Provider，插件会用它的默认模型来生成日程。留空就用当前对话的默认 Provider。",
         "type": "string",
+        "_special": "select_provider",
         "default": ""
       }
     }

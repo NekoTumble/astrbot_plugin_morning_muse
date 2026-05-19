@@ -23,6 +23,7 @@ class ScheduleGenerator:
             logger.info(msg)
 
     async def _get_provider(self):
+        """获取默认会话 provider（兜底用）"""
         if self.context is None:
             return None
         try:
@@ -30,10 +31,47 @@ class ScheduleGenerator:
         except Exception:
             return None
 
+    async def _resolve_provider_for_schedule(self):
+        """
+        根据 schedule_model 配置解析出实际要用的 Provider 和模型名。
+        
+        返回: (provider, model_name)
+        - 如果 schedule_model 是一个有效的 Provider ID → 返回该 provider 实例 + None（用默认模型）
+        - 如果 schedule_model 是模型名 → 返回当前会话 provider + 模型名
+        - 如果都失败 → 返回 (None, None)
+        """
+        if self.context is None:
+            return None, None
+
+        schedule_model = self.plugin.get_config("schedule.schedule_model", "")
+
+        # 如果没配置，返回当前会话 provider
+        if not schedule_model:
+            provider = await self._get_provider()
+            return provider, None
+
+        # 尝试把 schedule_model 当作 Provider ID 查找
+        provider_manager = getattr(self.context, 'provider_manager', None)
+        if provider_manager:
+            try:
+                # get_provider_by_id 是 async 的
+                if hasattr(provider_manager, 'get_provider_by_id'):
+                    target = await provider_manager.get_provider_by_id(schedule_model)
+                    if target:
+                        self._add_log("info", f"日程使用指定 Provider: [{schedule_model}]，用其默认模型")
+                        return target, None  # None → 用 Provider 自己的默认模型
+            except Exception as e:
+                self._add_log("warning", f"查找 Provider [{schedule_model}] 失败: {e}")
+
+        # 没找到对应 Provider → 当作模型名传给当前会话 provider
+        self._add_log("info", f"将 [{schedule_model}] 作为模型名传给当前 Provider")
+        provider = await self._get_provider()
+        return provider, schedule_model
+
     async def generate(self, persona_id: str, dynamic_styles: Dict[str, str],
                        recent_messages: List[str] = None, force: bool = False) -> Optional[Dict]:
-        provider = await self._get_provider()
-        logger.warning(f"📅 生成日程: persona={persona_id}, force={force}, provider={provider is not None}")
+        provider, model = await self._resolve_provider_for_schedule()
+        logger.warning(f"📅 生成日程: persona={persona_id}, force={force}, provider={provider is not None}, model={model}")
 
         today = date.today()
         if not force:
@@ -49,7 +87,6 @@ class ScheduleGenerator:
             return None
 
         prompt = context["prompt"]
-        model = self.plugin.get_config("schedule.schedule_model", "")
         schedule_data = None
 
         if provider is not None:
