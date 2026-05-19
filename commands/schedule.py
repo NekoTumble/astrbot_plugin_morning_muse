@@ -19,6 +19,18 @@ class ScheduleCommands:
         today = datetime.date.today()
         schedule = await self.storage.load_schedule(persona_id, today)
         if not schedule:
+            # 检查昨天日程是否存在，区分新老用户
+            yesterday = today - datetime.timedelta(days=1)
+            yesterday_schedule = await self.storage.load_schedule(persona_id, yesterday)
+            if yesterday_schedule:
+                # 老用户：展示昨天的日程，提示今天日程将在08:00生成
+                yesterday_text = self._format_schedule(yesterday_schedule)
+                return (f"今天的日程将在08:00生成，先看看昨天的日程吧喵～"
+                        f"\n\n"
+                        f"【昨天 {yesterday.strftime('%m/%d')} 的日程】"
+                        f"\n"
+                        f"{yesterday_text}")
+            # 新用户：自动生成首日日程
             recent = await self.get_recent_messages(event) if self.get_recent_messages else None
             schedule = await self.generator.generate(persona_id, self.dynamic_styles, recent_messages=recent)
         if schedule:
