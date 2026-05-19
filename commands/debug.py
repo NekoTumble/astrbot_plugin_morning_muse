@@ -63,7 +63,6 @@ class DebugCommands:
                 lines.append(f"  ⚠️ {pid} (未找到)")
 
         # 今日日程生成状态
-        today = datetime.date.today()
         lines.append(f"\n📅 今日日程状态 ({today.isoformat()})：")
         for pid in all_ids:
             schedule = await p.storage.load_schedule(pid, today)
