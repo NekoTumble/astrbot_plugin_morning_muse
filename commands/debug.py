@@ -24,6 +24,11 @@ class DebugCommands:
         lines.append(f"⏰ 定时生成：{p.get_config('schedule.schedule_time', '08:00')}")
         lines.append(f"🤖 生成模型：{p.get_config('schedule.schedule_model', '') or '(使用默认)'}")
 
+        # 今日节日（从 context_builder 的三层检测获取）
+        today = datetime.date.today()
+        holiday_info = p.context_builder._get_holiday_info(today)
+        lines.append(f"🎉 今日节日：{holiday_info}")
+
         # 静态人格配置 - 修复：使用嵌套路径读取
         lines.append("\n👤 已配置人格（静态）：")
         has_static = False

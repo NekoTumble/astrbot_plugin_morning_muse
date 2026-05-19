@@ -1,21 +1,116 @@
 import json
-from datetime import date
+from datetime import date, datetime, timedelta
 import random
 from typing import Dict, List, Any
 from .storage import ScheduleStorage
 from astrbot.api import logger
 
+try:
+    from lunar_python import Lunar
+    _HAS_LUNAR = True
+except ImportError:
+    _HAS_LUNAR = False
+
 class ContextBuilder:
+
+    # ── 公历节日（仅非法定节假日） ──
+    SOLAR_FESTIVALS = {
+        (2, 14): "情人节 💕",
+        (3, 8): "妇女节 🌸",
+        (4, 1): "愚人节 🤪",
+        (5, 20): "520网络情人节 💖",
+        (6, 1): "儿童节 🧒",
+        (10, 31): "万圣节 🎃",
+        (12, 24): "平安夜 🎄",
+        (12, 25): "圣诞节 🎄",
+    }
+
+    # ── lunar-python 未覆盖的农历节日 ──
+    LUNAR_EXTRA = {
+        (7, 7): "七夕节 🥰",
+        (7, 15): "中元节 🕯️",
+    }
+
+    # ── 已在法定节假日中，第三层需跳过的农历节日 ──
+    LEGAL_LUNAR = {"春节", "清明节", "端午节", "中秋节", "除夕", "农历除夕"}
+
     def __init__(self, plugin, storage: ScheduleStorage, holidays_module):
         self.plugin = plugin
         self.storage = storage
         self.holidays = holidays_module
 
+    # ── 三层节日检测 ───────────────────────────────────────
     def _get_holiday_info(self, today: date) -> str:
-        cn_holidays = self.holidays.China()
-        if today in cn_holidays:
-            return f"今天是法定节假日：{cn_holidays.get(today)}"
-        return "今天为工作日"
+        """三层节日检测：法定节假日 → 公历节日 → 农历节日"""
+        parts = []
+
+        # 第一层：法定节假日（holidays）
+        cn = self.holidays.China()
+        if today in cn:
+            parts.append(f"法定节假日：{cn.get(today)}")
+
+        # 第二层：公历节日（固定 + 浮动）
+        solar = self._get_solar_festival(today)
+        if solar:
+            parts.append(solar)
+
+        # 第三层：农历节日（lunar-python）
+        lunar = self._get_lunar_festival(today)
+        if lunar:
+            parts.append(lunar)
+
+        return "，".join(parts) if parts else "今天为工作日"
+
+    # ── 公历节日 ──────────────────────────────────────────
+    @staticmethod
+    def _get_nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+        """获取某月第 n 个星期 weekday（0=周一, 6=周日）"""
+        first = date(year, month, 1)
+        offset = (weekday - first.weekday()) % 7
+        return first + timedelta(days=offset + 7 * (n - 1))
+
+    def _get_solar_festival(self, today: date) -> str:
+        """检查公历节日（固定日期 + 浮动日期）"""
+        # 固定日期
+        key = (today.month, today.day)
+        if key in self.SOLAR_FESTIVALS:
+            return self.SOLAR_FESTIVALS[key]
+        # 浮动日期
+        y = today.year
+        if today == self._get_nth_weekday(y, 5, 6, 2):   # 5月第2个周日
+            return "母亲节 🌸"
+        if today == self._get_nth_weekday(y, 6, 6, 3):   # 6月第3个周日
+            return "父亲节 👔"
+        if today == self._get_nth_weekday(y, 11, 3, 4):  # 11月第4个周四
+            return "感恩节 🦃"
+        return ""
+
+    # ── 农历节日 ──────────────────────────────────────────
+    def _get_lunar_festival(self, today: date) -> str:
+        """用 lunar-python 查农历节日，跳过已在法定节假日中的"""
+        if not _HAS_LUNAR:
+            return ""
+        try:
+            lunar = Lunar.fromDate(datetime.combine(today, datetime.min.time()))
+            month, day = lunar.getMonth(), lunar.getDay()
+
+            results = []
+            # lunar-python 自带节日（已跳过法定节日的覆盖）
+            for f in lunar.getFestivals():
+                if f not in self.LEGAL_LUNAR:
+                    results.append(f)
+
+            # 补充 lunar-python 未覆盖的
+            extra = self.LUNAR_EXTRA.get((month, day))
+            if extra:
+                raw = extra.split(" ")[0]
+                if raw not in results:
+                    results.append(extra)
+
+            return "，".join(results) if results else ""
+        except Exception as e:
+            logger.error(f"[晨光心语] 获取农历节日异常: {e}")
+            return ""
 
     def _random_pick(self, pool, fallback: str) -> str:
         if isinstance(pool, list):
