@@ -58,6 +58,11 @@ class ScheduleCommands:
 
         recent = await self.get_recent_messages(event) if self.get_recent_messages else None
 
+        # 缓存聊天记录，方便定时生成时参考
+        if recent and self.plugin.chat_cache:
+            self.plugin.chat_cache.update(current_persona, recent)
+            await self.plugin.chat_cache.save()
+
         # 并发生成所有人格的日程
         tasks = []
         for pid in all_personas:
