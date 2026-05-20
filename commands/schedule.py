@@ -158,7 +158,7 @@ class PersonaCommands:
         cmd_text = message.strip()
         if not cmd_text.startswith('/'):
             cmd_text = '/' + cmd_text
-        match = re.match(r'/风格\s+绑定\s+(\S+)\s+(.+)', cmd_text)
+        match = re.match(r'/风格\s+绑定\s+([\w\u4e00-\u9fff\-]+)\s+(.+)', cmd_text)
         if not match:
             return "格式：/风格 绑定 <人格名> <风格描述>"
         persona_name = match.group(1).strip()

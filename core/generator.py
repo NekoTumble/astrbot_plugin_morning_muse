@@ -15,6 +15,10 @@ class ScheduleGenerator:
     def _add_log(self, level: str, msg: str):
         entry = {"time": datetime.now().isoformat(), "level": level, "msg": msg}
         self.debug_logs.append(entry)
+        # 限制日志条数，防止内存无限增长
+        max_logs = getattr(self.plugin, '_max_debug_logs', 100)
+        if len(self.debug_logs) > max_logs:
+            self.debug_logs[:] = self.debug_logs[-max_logs:]
         if level == "error":
             logger.error(msg)
         elif level == "warning":

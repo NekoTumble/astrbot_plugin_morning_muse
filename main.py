@@ -73,6 +73,7 @@ class MorningMusePlugin(Star):
         self.dynamic_styles: Dict[str, str] = {}
         self.persona_map: Dict[str, str] = {}
         self.debug_logs: List[Dict] = []
+        self._max_debug_logs = 100
         self._ready = False
         self.chat_cache: Optional[ChatHistoryCache] = None
         

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import date
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -12,8 +13,18 @@ class ScheduleStorage:
         self.cache: Dict[str, Dict] = {}  # key: persona_id_date
         self._lock = asyncio.Lock()
 
+    @staticmethod
+    def _sanitize_persona_id(persona_id: str) -> str:
+        """过滤 persona_id 中的路径遍历字符，防止写入到数据目录外"""
+        # 移除所有路径分隔符和 . 组合
+        clean = persona_id.replace("/", "").replace("\\", "").replace("..", "")
+        # 只保留安全字符（字母、数字、中文、下划线、横线、空格）
+        clean = re.sub(r'[^\w\u4e00-\u9fff\- ]', '', clean)
+        return clean.strip() or "default"
+
     def _get_path(self, persona_id: str, d: date) -> Path:
-        return self.data_dir / persona_id / f"schedule_{d.isoformat()}.json"
+        safe_id = self._sanitize_persona_id(persona_id)
+        return self.data_dir / safe_id / f"schedule_{d.isoformat()}.json"
 
     async def load_schedule(self, persona_id: str, d: date) -> Optional[Dict[str, Any]]:
         cache_key = f"{persona_id}_{d.isoformat()}"
