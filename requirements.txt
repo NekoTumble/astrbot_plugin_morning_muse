@@ -1,0 +1,6 @@
+aiohttp>=3.9.0
+apscheduler>=3.10.0
+holidays>=0.29
+lunar-python>=1.0.0
+aiofiles>=0.8.0
+httpx>=0.24.0
