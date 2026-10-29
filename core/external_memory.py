@@ -29,12 +29,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-try:
-    from astrbot.api import logger
-except ImportError:  # 离线自测 / 单测时没有 astrbot
-    import logging
-
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 from .state_store import safe_persona_id
 

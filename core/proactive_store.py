@@ -26,12 +26,7 @@ from typing import Any
 
 import aiofiles
 
-try:
-    from astrbot.api import logger
-except ImportError:  # 独立自测
-    import logging
-
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 # 账本里最多留几条「最近发生」的记录（给 /晨光 主动状态 看个大概就够）
 _MAX_HISTORY = 30

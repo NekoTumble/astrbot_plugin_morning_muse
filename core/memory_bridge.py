@@ -27,12 +27,7 @@ from typing import Any
 
 import aiofiles
 
-try:
-    from astrbot.api import logger
-except ImportError:
-    import logging
-
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 from .event_ledger import _tokenize
 from .state_store import safe_persona_id

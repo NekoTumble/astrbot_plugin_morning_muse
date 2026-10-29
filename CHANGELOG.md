@@ -1,5 +1,53 @@
 # 更新日志
 
+## v1.5.27 · 上架审核整改：日程改注入本轮上下文、日志统一走 astrbot.api — 2026-10-29
+
+插件市场上架审核判了两条平台规范问题（安全扫描 66 个引擎全部无害）。两条都不影响功能，但都会影响别人用你的插件。
+
+### ① 日程不再写进 system_prompt（这条是审核标"严重"的）
+
+`on_llm_request` 里原来把日程、内在状态、主动分享条目拼到 `req.system_prompt` 末尾。
+这些东西每轮都在变，而服务端提示词缓存是按**前缀**匹配的 —— 系统提示词一变，整段历史缓存全废。
+官方文档写明这类写法会让成本涨约 7-20 倍。
+
+改成 `req.extra_user_content_parts.append(TextPart(...).mark_as_temp())`：
+挂在**本轮用户消息**末尾，且 `mark_as_temp` 让它不写进会话历史。
+实测（AstrBot 4.29.3）：写历史时按 part 的 `_no_save` 剔除，用户原话照常保留 ——
+所以下一轮请求的前缀与「完全不做注入」时完全一致，注入本身不额外损失缓存。
+
+注入文本外面套了 `<daily_context>` 标签，块内第一句说明"这是你自己的日程与此刻状态，不是用户说的话"。
+`system_prompt` 一个字没动。
+
+### ② 日志统一从 astrbot.api 导入
+
+- `core/timezone_utils.py`、`core/weather_client.py` 原来 `logging.getLogger("astrbot")`，改成 `from astrbot.api import logger`。
+- `event_ledger` / `external_memory` / `memory_bridge` / `memory_source` / `proactive_store` / `proactive` / `state_store`
+  七个模块的 `try/except ImportError` 回退分支全部删掉，统一一行 `from astrbot.api import logger`。
+- 离线自检脚本（`docs/verify_schedule_align.py`、`docs/verify_external_memory.py`）里补了一段引导：
+  没有 astrbot 包时造一个最小 logger 替身，脚本照样能脱离 AstrBot 跑。
+
+### ③ 「此刻」段渲染拆成两行
+
+`（此刻）` 下面原来是一条 `- 想着主人（原本的打算：晚间: 长文……）` —— 括弧套括弧，
+把**当天唯一那份日程正文**压成了注释，读起来像补丁。
+
+拆成两行平视：
+
+```
+- 现在：想着主人
+- 今天排的是：晚间 · 洗完澡把尾巴擦蓬松，坐在书桌前写日记……
+```
+
+内容一个字没动，只是把「状态机的短标签」和「日程正文」分开摆。
+顺手给 `here.get()` 补了 `''` 默认值，键缺失时不会再打出 `None`。
+
+（注：状态机没开的时候走另一个分支，仍是 `- 晚间: 长文` 的老格式，这次没动。）
+
+### ④ 版本与兼容
+
+- `metadata.yaml`：`version` 1.5.26 → 1.5.27；`astrbot_version` `">=4.24.0"` → `">=4.24.2"`。
+  后者是因为 `mark_as_temp()` 是 AstrBot v4.24.2 才加的（PR #7976）。
+
 ## v1.5.26 · 公开前复核：去掉 BOM、路径不再写死、退役过时脚本 — 2026-10-29
 
 最终复核又揪出四条尾巴。都不影响功能，但都会在公开仓库里留下痕迹、或者误导拉下来的人。

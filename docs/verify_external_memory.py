@@ -32,6 +32,21 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent
 CORE = PLUGIN / "core"
+
+# 离线自检引导：没有 AstrBot 时给插件模块一个最小 logger 替身
+# （插件本体统一 `from astrbot.api import logger`，不写回退分支；这里补上现场）
+try:
+    import astrbot.api  # noqa: F401
+except ImportError:  # pragma: no cover - 只在脱离 AstrBot 的环境里走到
+    import logging as _logging
+
+    _logging.basicConfig(level=_logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    _api = types.ModuleType("astrbot.api")
+    _api.logger = _logging.getLogger("muse-selfcheck")
+    _pkg = types.ModuleType("astrbot")
+    _pkg.api = _api
+    sys.modules["astrbot"] = _pkg
+    sys.modules["astrbot.api"] = _api
 # 数据目录默认按插件位置推：<主目录>/data/plugin_data/<插件名>，也可用 MM_PLUGIN_DATA 覆盖
 _DATA_DEFAULT = PLUGIN.parents[1] / "plugin_data" / PLUGIN.name
 DATA_DIR = Path(os.environ.get("MM_PLUGIN_DATA", str(_DATA_DEFAULT)))

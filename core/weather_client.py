@@ -4,15 +4,14 @@
 把「霾 / 大雾 / 高温」这类判断从「中文文本捞词」升级成「官方通报」。
 """
 import asyncio
-import logging
 import re
 import time
 from datetime import datetime
 from typing import Any
 
-from .timezone_utils import get_today
+from astrbot.api import logger
 
-logger = logging.getLogger("astrbot")
+from .timezone_utils import get_today
 
 try:
     import httpx

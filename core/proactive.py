@@ -33,12 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, NamedTuple
 
-try:
-    from astrbot.api import logger
-except ImportError:  # 独立自测
-    import logging
-
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 from .proactive_store import (
     ProactiveState,

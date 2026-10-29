@@ -11,6 +11,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
+from astrbot.core.agent.message import TextPart
 
 from .commands.debug import DebugCommands
 from .commands.schedule import PersonaCommands, ScheduleCommands
@@ -1175,7 +1176,7 @@ class MorningMusePlugin(Star):
     # priority=-1：AstrBot 的钩子按 priority **降序**跑。给个负数，保证自己排在记忆插件
     # 后面 —— 它们刚塞进 req 的记忆块，我们才看得见（从此不靠插件加载顺序碰运气）。
     @filter.on_llm_request(
-        desc="在LLM请求前注入当前人格的今日日程（穿搭+活动安排）到系统提示词",
+        desc="在LLM请求前注入当前人格的今日日程（穿搭+活动安排）到本轮上下文",
         priority=-1,
     )
     async def inject_schedule(self, event: AstrMessageEvent, req: ProviderRequest):
@@ -1294,13 +1295,44 @@ class MorningMusePlugin(Star):
             if share_lines:
                 injection += ("\n（她今天有件想跟你说的事，合适的时候可以自然提起："
                               + "；".join(share_lines) + "）")
-            if req.system_prompt:
-                req.system_prompt += f"\n{injection}"
-            else:
-                req.system_prompt = injection
+            self._append_dynamic_context(req, injection)
 
     # 六个模糊时段 → 大致钟点（和天气、状态机用的是同一套）
     _PERIOD_ORDER = ["清晨", "上午", "午间", "下午", "傍晚", "晚间"]
+
+    # 动态上下文的固定开头：既当给模型看的标签，也当「这轮塞过了」的幂等标记
+    _DYN_CTX_MARK = "<daily_context>"
+
+    def _append_dynamic_context(self, req, text: str) -> None:
+        """把每轮都会变的动态内容挂到「本轮用户消息末尾」，不碰 system_prompt。
+
+        为什么不能写 system_prompt（v1.5.27，上架审核）：
+        服务端提示词缓存是按**前缀**匹配的，系统提示词每轮一变，整段历史缓存就全废了。
+        官方插件文档写明这类写法会让成本涨 7-20 倍。
+
+        为什么用 mark_as_temp：标记后这段只在本次请求里给模型看，**不写进会话历史**——
+        所以下一轮请求的前缀与「完全不做注入」时完全一致，注入本身不额外损失缓存。
+        实测（AstrBot 4.29.3）：写历史时按 part 的 `_no_save` 剔除，用户原话照常保留。
+        """
+        text = (text or "").strip()
+        if not text:
+            return
+
+        block = f"{self._DYN_CTX_MARK}\n{text}\n</daily_context>"
+
+        parts = getattr(req, "extra_user_content_parts", None)
+        if parts is None:
+            # 极老版本没有这个字段：宁可退化回 system_prompt，也不要抛异常让整轮对话挂掉
+            req.system_prompt = ((req.system_prompt or "") + "\n" + text).strip()
+            return
+
+        # 幂等：同一轮里钩子若被触发两次，别叠第二份
+        for p in parts:
+            body = p.get("text") if isinstance(p, dict) else getattr(p, "text", "")
+            if isinstance(body, str) and body.lstrip().startswith(self._DYN_CTX_MARK):
+                return
+
+        parts.append(TextPart(text=block).mark_as_temp())
 
     @staticmethod
     def _period_index_of(hour: int) -> int:
@@ -1315,7 +1347,7 @@ class MorningMusePlugin(Star):
         return idx
 
     def _format_for_injection(self, schedule: dict, life_state: dict = None) -> str:
-        """把日程注入系统提示词。
+        """把日程整理成一段上下文，交给本轮对话（不写 system_prompt）。
 
         - `inject.realtime_slice` 开着：按当前时刻切三刀（今天早些时候 / 此刻 / 接下来）。
           真人不会把已经做过的事当成还没发生——这是「像真实生活」最容易露馅的地方。
@@ -1361,11 +1393,14 @@ class MorningMusePlugin(Star):
         cur_act = activity_zh((life_state or {}).get("current_activity", ""))
         if cur_act:
             if here:
+                # 两行平视：状态机给的是「现在」，日程正文是「今天排的」——
+                # 别再把后者塞进括弧当注释（v1.5.27 按实测反馈拆平）。
+                lines.append(f"- 现在：{cur_act}")
                 lines.append(
-                    f"- {cur_act}（原本的打算：{here.get('time')}: {here.get('activity')}）"
+                    f"- 今天排的是：{here.get('time', '')} · {here.get('activity', '')}"
                 )
             else:
-                lines.append(f"- {cur_act}")
+                lines.append(f"- 现在：{cur_act}")
         elif here:
             lines.append(f"- {here.get('time')}: {here.get('activity')}")
         if life_state:

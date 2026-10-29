@@ -18,14 +18,9 @@ import re
 from datetime import date, timedelta
 from typing import Any
 
+from astrbot.api import logger
+
 from .timezone_utils import get_today
-
-try:
-    from astrbot.api import logger
-except ImportError:  # 独立自测时（不在 AstrBot 运行环境内）
-    import logging
-
-    logger = logging.getLogger(__name__)
 
 
 # 心情极性（用来在没给出 valence 时，从文字里猜一个方向）

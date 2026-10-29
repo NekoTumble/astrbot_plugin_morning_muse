@@ -32,6 +32,22 @@ from pathlib import Path
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLUGIN_DIR))
 
+# 离线自检引导：没有 AstrBot 时给插件模块一个最小 logger 替身
+# （插件本体统一 `from astrbot.api import logger`，不写回退分支；这里补上现场）
+try:
+    import astrbot.api  # noqa: F401
+except ImportError:  # pragma: no cover - 只在脱离 AstrBot 的环境里走到
+    import logging as _logging
+    import types as _types
+
+    _logging.basicConfig(level=_logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    _api = _types.ModuleType("astrbot.api")
+    _api.logger = _logging.getLogger("muse-selfcheck")
+    _pkg = _types.ModuleType("astrbot")
+    _pkg.api = _api
+    sys.modules["astrbot"] = _pkg
+    sys.modules["astrbot.api"] = _api
+
 from core.life_bridge import LifeBridgeManager  # noqa: E402
 from core.generator import ScheduleGenerator    # noqa: E402
 

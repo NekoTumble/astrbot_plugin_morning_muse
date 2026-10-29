@@ -1,8 +1,7 @@
 """时区工具模块 - 提供统一的时区感知日期获取"""
 import datetime
-import logging
 
-logger = logging.getLogger("astrbot")
+from astrbot.api import logger
 
 # Try zoneinfo (Python 3.9+) first, fallback to pytz
 try:

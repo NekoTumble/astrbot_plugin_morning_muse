@@ -26,12 +26,7 @@ from typing import Any
 
 import aiofiles
 
-try:
-    from astrbot.api import logger
-except ImportError:  # 独立自测
-    import logging
-
-    logger = logging.getLogger(__name__)
+from astrbot.api import logger
 
 from .state_store import safe_persona_id
 from .timezone_utils import get_today
