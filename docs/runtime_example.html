@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1280px;
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #fdfbf7;
+    color: #3b342f;
+    padding: 34px 40px 26px;
+  }
+
+  /* ── 顶部标题 ── */
+  header { display: flex; align-items: flex-end; justify-content: space-between; padding-bottom: 16px; border-bottom: 2px solid #f0e4dc; }
+  .title-row { display: flex; align-items: center; gap: 13px; }
+  .dot { width: 13px; height: 13px; border-radius: 50%; background: #e8a08a; }
+  h1 { font-size: 30px; font-weight: 700; letter-spacing: .5px; }
+  h1 small { font-size: 15px; font-weight: 400; color: #a89a90; margin-left: 10px; letter-spacing: 0; }
+  .sub { font-size: 13.5px; color: #8d8078; line-height: 1.55; text-align: right; }
+  .sub b { color: #c9765c; font-weight: 600; }
+
+  /* ── 主体两栏（网格等高，高度跟着内容走） ── */
+  main { display: grid; grid-template-columns: 600px 1fr; gap: 22px; padding-top: 18px; align-items: stretch; }
+  .col { display: flex; flex-direction: column; }
+  .col.left { }
+  .col.right { }
+
+  .colhead { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .colhead .tag {
+    font-size: 11px; font-weight: 700; letter-spacing: .6px;
+    padding: 3px 9px; border-radius: 4px;
+  }
+  .left .colhead .tag { background: #eef3f0; color: #4d7c68; }
+  .right .colhead .tag { background: #fdeee8; color: #c9765c; }
+  .colhead span.t { font-size: 14px; color: #6d635c; font-weight: 600; }
+  .colhead .note { font-size: 11.5px; color: #b0a49b; margin-left: auto; }
+
+  /* ── 左：注入内容（模拟真实文本输出） ── */
+  .inject {
+    height: 100%; background: #fff; border: 1px solid #ece0d8; border-radius: 10px;
+    padding: 16px 18px 14px; overflow: hidden;
+    box-shadow: 0 1px 0 #f6ebe4;
+    font-size: 13.2px; line-height: 1.72;
+  }
+  .inject .h { font-weight: 700; color: #3b342f; font-size: 13.6px; }
+  .inject .lbl { color: #a2664f; font-weight: 600; }
+  .inject .dim { color: #8d8078; font-size: 12.6px; }
+  .inject .line { display: block; }
+  .hr { height: 1px; background: #f3e9e2; margin: 8px 0; }
+  .now { background: #fdf3ee; border-left: 3px solid #e8a08a; padding: 6px 10px; border-radius: 5px; margin: 3px 0; }
+  .now .k { color: #c9765c; font-weight: 700; }
+
+  /* ── 右：她的回复 ── */
+  .reply {
+    height: 100%; background: #fff; border: 1px solid #ece0d8; border-radius: 10px;
+    padding: 16px 18px; overflow: hidden; position: relative;
+    box-shadow: 0 1px 0 #f6ebe4;
+  }
+  .reply::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: #e8a08a; border-radius: 10px 0 0 10px;
+  }
+  .bubble { font-size: 13.4px; line-height: 1.85; color: #4a423c; }
+  .bubble .act { color: #a89a90; font-size: 12.8px; }
+  .bubble .em { color: #c9765c; }
+  .say { margin-bottom: 11px; }
+  .ask {
+    font-size: 12.8px; color: #8d8078; margin-bottom: 11px;
+    padding-bottom: 10px; border-bottom: 1px dashed #f0e4dc;
+  }
+  .ask b { color: #6d635c; font-weight: 600; }
+
+  /* ── 底部要点 ── */
+  footer { display: flex; align-items: center; gap: 10px; padding-top: 16px; margin-top: 16px; border-top: 1px solid #f0e4dc; }
+  .chip { font-size: 12.5px; color: #7d716a; background: #faf3ee; border: 1px solid #f0e2d9; border-radius: 20px; padding: 5px 13px; }
+  .chip b { color: #c9765c; font-weight: 600; }
+  footer .sp { flex: 1; }
+  footer .ver { font-size: 11.5px; color: #b8aca3; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title-row">
+    <div class="dot"></div>
+    <h1>晨光心语 · 运行示例<small>v1.5.27</small></h1>
+  </div>
+  <div class="sub">
+    插件把「今天该怎么过」交给模型，<br>
+    她再照着自己的样子，把它活出来、说出来。
+  </div>
+</header>
+
+<main>
+  <!-- 左：注入内容 -->
+  <section class="col left">
+    <div class="colhead">
+      <span class="tag">每轮对话 · 末尾</span>
+      <span class="t">她收到的</span>
+      <span class="note">不进 system prompt，也不进对话历史</span>
+    </div>
+    <div class="inject">
+      <span class="line h">[今日日程 · 此刻]</span>
+      <span class="line"><span class="lbl">穿搭：</span>米色针织开衫配白衬衫，深灰长裙，帆布鞋；头发松松扎着</span>
+      <div class="hr"></div>
+
+      <span class="line dim">（今天早些时候，已经做过）</span>
+      <span class="line">- 清晨：泡一壶花茶，烤两片吐司，坐在窗边慢慢吃</span>
+      <span class="line">- 上午：把所有收件箱清空，把周报填完</span>
+      <div class="hr"></div>
+
+      <span class="line dim">（此刻）</span>
+      <div class="now">
+        <span class="line"><span class="k">现在：</span>专心整理书架</span>
+        <span class="line"><span class="k">今天排的是：</span>午后 · 给自己煮一小锅热汤面，吃完在阳台上坐一会儿</span>
+      </div>
+      <span class="line">- 精力 0.42，心情 平静</span>
+      <div class="hr"></div>
+
+      <span class="line dim">（接下来）</span>
+      <span class="line">- 下午：翻衣柜，把厚衣服拿出来晒一晒</span>
+      <span class="line">- 傍晚：下楼走一小圈，顺便买点明天的早饭</span>
+      <div class="hr"></div>
+
+      <span class="line dim">寄语：</span>
+      <span class="line dim">今天的重点是把手里的事收个尾，别急着开新的。</span>
+      <div class="hr"></div>
+
+      <span class="line dim">（她今天有件想跟你说的事，合适的时候可以自然提起：</span>
+      <span class="line dim">楼下那棵桂花开了，风一吹满院子都是味）</span>
+    </div>
+  </section>
+
+  <!-- 右：她的回复 -->
+  <section class="col right">
+    <div class="colhead">
+      <span class="tag">她说出来的</span>
+      <span class="t">同一轮对话</span>
+      <span class="note">带着日程、状态、语气</span>
+    </div>
+    <div class="reply">
+      <div class="bubble">
+        <div class="ask"><b>主人</b>　今天在忙什么呀，怎么半天没动静</div>
+        <div class="say">
+          <span class="act">（把手机从桌角摸过来，尾巴先动了一下）</span>
+          哪能没动静呀，下午一直在理书架，手都没腾出来。
+        </div>
+        <div class="say">
+          刚把书架重新理了一遍，按颜色排的，看着心里就顺。
+          <span class="act">（把最上面那本抽出来又塞回去，有点得意）</span>
+        </div>
+        <div class="say">
+          中午给自己煮了碗汤面，热乎乎的，坐在阳台上吃完，晒了会儿太阳。
+          这种时候就<span class="em">不太想开工</span>，反正今天的收尾已经收完了。
+        </div>
+        <div class="say">
+          对了，楼下那棵桂花开了——风一吹满院子都是味儿，刚才下楼倒垃圾站那儿闻了半天。
+        </div>
+        <div class="say">
+          等会儿下楼买早饭，顺便走一圈 <span class="act">（尾巴晃了晃）</span>。
+          主人要是今天也忙完了，晚上陪我聊两句呗。
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="chip"><b>六个时段</b> · 一条从早到晚的线</div>
+  <div class="chip"><b>两条时间线</b> · 排的 vs 真在做的</div>
+  <div class="chip"><b>一本流水账</b> · 没做完的一直留着</div>
+  <div class="chip"><b>一座只读的桥</b> · 只读记忆，不写回去</div>
+  <div class="sp"></div>
+  <div class="ver">日程由 AI 生成 · 状态机在后台每小时推进</div>
+</footer>
+
+</body>
+</html>
