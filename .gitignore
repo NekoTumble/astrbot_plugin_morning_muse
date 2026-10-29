@@ -1,0 +1,9 @@
+# ── 本机专用，不进公开仓库（2026-10-29 小白整理）──
+_local_only_*/
+__pycache__/
+*.pyc
+*.pyo
+*.bak
+*.bak_*
+*.tmp
+.DS_Store

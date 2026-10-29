@@ -1,0 +1,929 @@
+{
+  "schedule": {
+    "description": "⏰ 日程生成",
+    "type": "object",
+    "items": {
+      "timezone": {
+        "description": "时区设置",
+        "hint": "日程生成使用的时区，例如 Asia/Shanghai、America/New_York。留空 = 用 Asia/Shanghai；填了无效的时区名会回退到 UTC。改完记得重载插件才生效——账本、状态种子、历史日程用的是启动时读到的那个时区。",
+        "type": "string",
+        "default": "Asia/Shanghai"
+      },
+      "schedule_time": {
+        "description": "每天几点自动生成日程",
+        "hint": "填时间，比如 08:00。到点了会自动给**所有活跃人格**各生成一份当天日程。",
+        "type": "string",
+        "default": "08:00"
+      },
+      "schedule_model": {
+        "description": "用哪个模型生成日程",
+        "hint": "从下拉框里挑一个模型，插件就用它来写每天的日程，不占用你主对话的模型。留空 = 用当前对话正在使用的那个模型。",
+        "type": "string",
+        "_special": "select_provider",
+        "default": ""
+      },
+      "schedule_model_backup": {
+        "description": "备用兜底模型",
+        "hint": "上面那个模型写不出来时（报错，或者返回的内容读不懂），自动换成这个再试一次。留空 = 回落到当前对话正在使用的模型。注意：填成跟上面那个**一模一样**时不会重试（省一次调用）。",
+        "type": "string",
+        "_special": "select_provider",
+        "default": ""
+      }
+    }
+  },
+  "persona_styles": {
+    "description": "👤 人格风格设定",
+    "hint": "给最多3个人格预设风格提示词。没主动设定人格的会话会自动用 default 分组。",
+    "type": "object",
+    "items": {
+      "persona_name_1": {
+        "description": "第一个人格的名字",
+        "type": "string",
+        "default": ""
+      },
+      "style_control_1": {
+        "description": "第一个人格的风格提示词",
+        "hint": "描述这个人格说话的风格，比如「用温柔的语气说话」。留空就是没有额外风格。",
+        "type": "text",
+        "default": ""
+      },
+      "persona_name_2": {
+        "description": "第二个人格的名字",
+        "type": "string",
+        "default": ""
+      },
+      "style_control_2": {
+        "description": "第二个人格的风格提示词",
+        "type": "text",
+        "default": ""
+      },
+      "persona_name_3": {
+        "description": "第三个人格的名字",
+        "type": "string",
+        "default": ""
+      },
+      "style_control_3": {
+        "description": "第三个人格的风格提示词",
+        "type": "text",
+        "default": ""
+      },
+      "style_control_default": {
+        "description": "默认风格（兜底）",
+        "hint": "上面三个人格都没匹配到时，就用这个风格。留空则不启用任何风格化。",
+        "type": "text",
+        "default": "自然亲切的语气"
+      }
+    }
+  },
+  "state": {
+    "description": "🧠 状态记忆（让日程接得上）",
+    "hint": "让日程不再是「每天重新抽签」，而是从昨天接着往下走。",
+    "type": "object",
+    "items": {
+      "enable_state_summary": {
+        "description": "记录每日状态",
+        "hint": "在每天的日程里多记一小块「状态」（精力、心情、还没做完的事），第二天的日程会参考它接着写。关掉 = 不记这块，每天的日程各写各的，前后接不上。",
+        "type": "bool",
+        "default": true
+      },
+      "max_open_threads": {
+        "description": "最多带几条「没做完的事」给第二天",
+        "hint": "填 3 = 最多挑 3 条昨天没做完的事交给第二天。填太大，日程会变得啰嗦。",
+        "type": "int",
+        "default": 3
+      }
+    }
+  },
+  "life_engine": {
+    "description": "🫀 内在状态（让她有自己的精力与心情）",
+    "hint": "打开后，她会拥有一条一直运转的「内在状态」：精力、心情、今天在忙什么。日程不再凭空编，而是从这些状态里长出来。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用内在状态",
+        "hint": "打开后，她拥有一条一直运转的「内在状态」：精力、心情、今天在忙什么。日程不再凭空编，而是从这些状态里长出来。关掉 = 取消这条内在状态，日程只能照着文字信息编排，也没有「累了」「心情不好」这回事。**打开**需要重载插件；**关掉**立即生效。",
+        "type": "bool",
+        "default": false
+      },
+      "persona_type": {
+        "description": "她是什么样的存在",
+        "hint": "ai = 虚拟生命：不会有饿、困、房租这类现实需求，最不容易出戏（推荐）。human = 有睡眠与体力恢复，但会带上现实生活的那一套。",
+        "type": "string",
+        "default": "ai"
+      },
+      "tick_interval_minutes": {
+        "description": "多久推进一次状态（分钟）",
+        "hint": "填 60 = 每一小时让她的状态往前走一小步，聊天时更贴近「此刻」。填 0 = 只在写日程时才推进（注意：主动消息、补算、睡眠回血、账本清理、晨间补睡醒、心跳回灌、记忆池清理也会跟着一起停掉，一般别填 0）。另外这个值**启动时读一次**，运行中改了要重载插件。",
+        "type": "int",
+        "default": 60
+      },
+      "catch_up": {
+        "description": "停机后补算状态",
+        "hint": "服务器关了一夜，重新打开时自动把这期间的状态补回来。关掉的话，关多久她的状态就停多久。",
+        "type": "bool",
+        "default": true
+      },
+      "max_personas": {
+        "description": "最多同时维护几个人格",
+        "hint": "每多一个人格，就多一份一直在跑的状态和它自己的小档案。一般填 3~5 就够，没必要开太多。",
+        "type": "int",
+        "default": 5
+      },
+      "wake_time": {
+        "description": "几点起床",
+        "hint": "格式 HH:MM（例如 07:00、07:30），也可以只填整点（填 7 = 07:00）。**她的作息就看这里**——导火索的「刚醒」、刹车的安静时段、早上补睡醒，全都跟着它走。改完立即生效，不用重载。",
+        "type": "string",
+        "default": "07:00"
+      },
+      "bedtime_time": {
+        "description": "几点睡觉",
+        "hint": "格式 HH:MM（例如 23:00、22:30），也可以只填整点（填 22 = 22:00）。**她的作息就看这里**——导火索的「刚要睡」（提前一小时）、刹车的安静时段默认都跟着它走。改完立即生效，不用重载。",
+        "type": "string",
+        "default": "23:00"
+      },
+      "sleep_reset": {
+        "description": "给 AI 人格补晨间睡醒",
+        "hint": "开 = 每天早上给她补一次「睡醒」：把「醒得太久」攒下的账清掉，精力回到该有的水平。**但不一定是满格**——熬夜熬狠了，还会剩一点疲惫带进新的一天。（另外，如果下面「睡觉时慢慢回血」开着，早上通常就只清账、不再往上刷；只有精力本来就明显偏低时，才会补到该有的水平。）关 = 保持原样：她是个虚拟生命，不会真的睡觉，精力只会一路往下掉。",
+        "type": "bool",
+        "default": true
+      },
+      "sleep_recover": {
+        "description": "睡觉时慢慢回血",
+        "hint": "开 = 她睡着的每一轮心跳，精力悄悄往上走一点，一觉醒来是慢慢暖回来的（推荐）。关 = 只有每天早上那一次「补睡醒」，中间一直是干耗着。",
+        "type": "bool",
+        "default": true
+      },
+      "sleep_recover_per_hour": {
+        "description": "睡觉时每小时回多少精力",
+        "hint": "0~1。默认 0.09 = 睡 8 小时回约 0.7。调大回得快，调小回得慢。注意有 **0.95 的上限**（回不满）；夜里被吵醒会按**实际睡着的时长**折算，起点本来就高时也回不到 0.7。只有在上面那个开关打开时才有用。",
+        "type": "float",
+        "default": 0.09
+      },
+      "zh_triggers": {
+        "description": "中文对话也生效",
+        "hint": "底座的对话关键词表整张是英文的，中文环境下一句都命中不了——夸她、逗她笑、说无聊，状态机全听不见。开 = 插件侧补一层中文对照，把中文翻成底座认得的信号（不动底座，升级也不会丢）。关 = 保持原样。",
+        "type": "bool",
+        "default": true
+      },
+      "zh_trigger_cooldown_minutes": {
+        "description": "中文信号冷却（分钟）",
+        "hint": "同一个中文信号隔这么久才认第二次，防止「哈哈」一晚上把灵感刷爆。默认 10，填 0 就是不冷却。",
+        "type": "int",
+        "default": 10
+      },
+      "zh_extra_keywords": {
+        "description": "自定义中文信号词（可选）",
+        "hint": "想让她认得你的「黑话」，一行一条，格式：引擎|信号|词1,词2。引擎六选一：energy 能量 / affect 情绪 / desire 亲密 / cognitive 认知 / identity 身份 / drive 驱动；信号名照抄内置表里的英文（如 exciting_topic、boring_topic）。例：energy|exciting_topic|超期待,等不及。以 # 开头是注释；留空 = 只用内置词表。",
+        "type": "text",
+        "default": ""
+      },
+      "schedule_replay": {
+        "description": "日程里的安排回灌给内在状态",
+        "hint": "开 = 每小时把日程里\"当前和未来几格\"的安排重新铺进内在状态（精力/心情跟着动）。认不出的活动、已经过去的格子都不碰，也绝不删减日程本身。⚠️ 注意：这个开关同时也管着\"夜里钉睡觉\"——关掉它，夜里那几格就不再被钉成「睡觉·家」了。关 = 日程只是写下来的文字，不反过来影响她的状态。",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
+  "inject": {
+    "description": "💬 对话里的「此刻感」",
+    "hint": "决定她在跟你聊天时，是以「一整天刚开始」的姿态出现，还是以「此刻正在过这一天」的姿态出现。",
+    "type": "object",
+    "items": {
+      "realtime_slice": {
+        "description": "按当前时刻切一刀",
+        "hint": "打开后，注入给她的日程只保留「今天早些时候做过什么 / 此刻在做什么 / 接下来要做什么」三块。深夜聊天时，她不会再拿「清晨：做早饭」当成还没发生的事。",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
+  "context": {
+    "description": "📜 上下文参考",
+    "type": "object",
+    "items": {
+      "reference_history_days": {
+        "description": "参考前几天的日程",
+        "hint": "生成新日程时，会看看前几天的安排，避免重复。调大数字会让日程更稳定，调小则更多变。",
+        "type": "int",
+        "slider": {
+          "min": 1,
+          "max": 30,
+          "step": 1
+        },
+        "default": 3
+      },
+      "reference_recent_count": {
+        "description": "参考最近多少条聊天记录",
+        "hint": "生成日程时，会抓取最近的聊天内容作为灵感。0 表示不参考。",
+        "type": "int",
+        "slider": {
+          "min": 0,
+          "max": 50,
+          "step": 1
+        },
+        "default": 5
+      }
+    }
+  },
+  "weather": {
+    "description": "🌤️ 天气集成",
+    "hint": "开启后，每天生成的日程里会带上天气。天气是通过 httpx 向免费的 wttr.in 服务请求获取的，不需要填密钥。",
+    "type": "object",
+    "items": {
+      "weather_enabled": {
+        "description": "是否启用天气信息",
+        "hint": "打开后，日程里就会包含天气信息。",
+        "type": "bool",
+        "default": false
+      },
+      "weather_location": {
+        "description": "天气查询城市",
+        "hint": "填城市的英文名，比如 Beijing、Shanghai、Guangzhou。",
+        "type": "string",
+        "default": "Beijing"
+      }
+    }
+  },
+  "daily_themes": {
+    "description": "🌅 今日主题池",
+    "hint": "每天随机抽一个当今日主题。按回车添加新条目。",
+    "type": "list",
+    "default": [
+      "探索日",
+      "社交日",
+      "宅家日",
+      "工作日",
+      "自我提升日",
+      "休闲放松日",
+      "创意日",
+      "运动日",
+      "整理日",
+      "美食日",
+      "文艺日",
+      "随性漫游日"
+    ]
+  },
+  "mood_colors": {
+    "description": "🌈 心情色彩池",
+    "hint": "每天随机抽一个心情色彩，会影响穿搭描述的氛围。",
+    "type": "list",
+    "default": [
+      "暖橙",
+      "薄荷绿",
+      "天空蓝",
+      "浅紫",
+      "樱花粉",
+      "奶油黄",
+      "雾霾蓝",
+      "珊瑚橘",
+      "奶茶棕",
+      "薰衣草紫",
+      "抹茶绿",
+      "蜜桃粉"
+    ]
+  },
+  "outfit_styles": {
+    "description": "👗 穿搭风格池",
+    "hint": "每天随机抽一个穿搭风格，她会照着这个方向想，但最后穿成什么样，还会带上她自己的人格偏好。",
+    "type": "list",
+    "default": [
+      "知性学院风",
+      "街头休闲风",
+      "温柔淑女风",
+      "酷飒中性风",
+      "慵懒居家风",
+      "精致约会风",
+      "运动活力风",
+      "日系森女风",
+      "法式优雅风",
+      "韩系甜美风",
+      "复古文艺风",
+      "极简都市风",
+      "甜酷混搭风",
+      "民族风情风",
+      "暗黑系风格"
+    ]
+  },
+  "schedule_types": {
+    "description": "🗂️ 日程类型池",
+    "hint": "每天随机抽一个日程类型，影响当天活动的整体方向。",
+    "type": "list",
+    "default": [
+      "户外活动型",
+      "社交聚会型",
+      "独处充电型",
+      "技能学习型",
+      "随性漫游型",
+      "家务整理型",
+      "工作专注型",
+      "休闲娱乐型",
+      "健身运动型",
+      "美食探索型",
+      "文化艺术型",
+      "购物采买型"
+    ]
+  },
+  "proactive": {
+    "description": "📣 主动消息（她自己也会想起你）",
+    "hint": "打开后，她才可能在「到点、太累、太难过了、想起你了」的时候主动来找你。前提：先在这个会话里用 /晨光 订阅 把会话加进白名单——没订阅的会话永远不会被主动打扰。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用主动消息",
+        "hint": "总开关。关着 = 她只在你开口时才回应（现在的样子）。打开 = 订阅过的会话里，她可能自己冒泡。改完**立即生效**，不用重载插件。",
+        "type": "bool",
+        "default": false
+      },
+      "proactive_model": {
+        "description": "主动消息用的模型",
+        "hint": "从下拉框里挑一个模型，专门用来写「主动开口」的那句话。留空 = 跟**当前对话正在用的模型**一致（日程那个若也留空，两者才刚好是同一个）。想让这句话更自然、或者想省一点开销，可以单独挑一个轻快的。",
+        "type": "string",
+        "_special": "select_provider",
+        "default": ""
+      },
+      "max_length": {
+        "description": "一条主动消息最长多少字",
+        "hint": "默认 120。她主动开口一般是短短一句，太长就变成汇报了。",
+        "type": "int",
+        "default": 120
+      },
+      "write_history": {
+        "description": "主动说完，也记进对话里",
+        "hint": "开 = 她主动说的那句话会轻轻写进会话记录，这样下一轮聊天她自己知道刚说过什么，不会一脸懵（推荐）。关 = 一句话都不留痕，但你回她的时候她可能接不上话。",
+        "type": "bool",
+        "default": true
+      },
+      "self_veto": {
+        "description": "让她自己决定这次要不要开口",
+        "hint": "她开口前会先问自己一句「现在真的想说吗」——不想说就安静地跳过：不占当天额度，这个由头也不算用过（下次还能用）。跳过的事会记在小本子上，下次摆回她眼前，免得「拿不准就别发」一路憋成哑巴。三个档在下面直接选就好。",
+        "type": "string",
+        "options": [
+          "off",
+          "merge",
+          "separate"
+        ],
+        "labels": [
+          "关闭",
+          "并入当天",
+          "单独判一次"
+        ],
+        "subtitles": [
+          "不问她，由头一到就直接发 —— 最省事，但她可能在你不太需要的时候开口",
+          "在她写这条消息的同一次里顺带判一下 —— 不额外花钱（推荐）",
+          "单独再多问一次模型，专门判断该不该发 —— 判得更准，但每天会多几笔开销"
+        ],
+        "default": "merge"
+      }
+    }
+  },
+  "proactive_triggers": {
+    "description": "🧨 导火索（她为什么要开口）",
+    "hint": "八根导火索，每根都能单独开关。急档（疲惫/低落/大喜/承诺兑现）和缓档（纪念日/天气/刚醒刚要睡/旧事想起）的区别**只在优先级**——急档排在前面、缓档排在后面，选中的那根仍要过**同样几道刹车**（安静时段／睡着／最小间隔／每日额度），被拦下就顺延到下一个能打扰的时段。",
+    "type": "object",
+    "items": {
+      "enable_tired": {
+        "description": "① 疲惫",
+        "hint": "精力掉到阈值**（含等于）**时，她想找你说句话。具体那个数在下面「① 疲惫的精力阈值」。",
+        "type": "bool",
+        "default": true
+      },
+      "enable_low": {
+        "description": "② 低落",
+        "hint": "心情跌到阈值**（含等于）**时，她想被安慰一下。具体那个数在下面「② 低落的愉悦度阈值」。",
+        "type": "bool",
+        "default": true
+      },
+      "enable_joy": {
+        "description": "③ 大喜",
+        "hint": "心情特别好、强度也够时，她忍不住想跟你分享。注意：满足、平静这类温和的好心情不算「大喜」。",
+        "type": "bool",
+        "default": true
+      },
+      "enable_promise": {
+        "description": "④ 承诺兑现",
+        "hint": "生活账本里某件「一直惦记着」的事刚做完，她想报个平安。（需要生活账本开着）",
+        "type": "bool",
+        "default": true
+      },
+      "enable_anniversary": {
+        "description": "⑤ 纪念日",
+        "hint": "到日子了，她想提一句。（纪念日在下面填）",
+        "type": "bool",
+        "default": true
+      },
+      "anniversaries": {
+        "description": "⑤ 纪念日清单",
+        "hint": "一行一个，格式：月-日 名称（例：3-14 小白的生日）。按回车添加。",
+        "type": "list",
+        "default": []
+      },
+      "auto_holidays": {
+        "description": "⑤ 自动认节日",
+        "hint": "打开后，元旦 / 春节 / 情人节 / 端午 / 七夕 / 中秋 / 国庆 / 圣诞…到日子她自己就提，不用你手填。（用的是日程那边同一套节日表）",
+        "type": "bool",
+        "default": true
+      },
+      "holiday_exclude": {
+        "description": "⑤ 节日排除清单",
+        "hint": "命中这些词的节日**不会**触发。默认挡住「清明 / 中元」——祭扫的日子，不该让她欢快地开口。一行一个。注意：清空也会**回落到默认的那两个**，没法完全关掉这条排除。",
+        "type": "list",
+        "default": [
+          "清明",
+          "中元"
+        ]
+      },
+      "holiday_first_day_only": {
+        "description": "⑤ 长假只提第一天",
+        "hint": "春节、国庆这种连着放好几天的，只在第一天提一次，免得七天假期天天说「今天是国庆节」。",
+        "type": "bool",
+        "default": true
+      },
+      "anniversary_last_year": {
+        "description": "⑤ 也算「去年的今天」",
+        "hint": "从生活账本里翻去年同一天发生的事，翻到就提一句。",
+        "type": "bool",
+        "default": false
+      },
+      "enable_weather": {
+        "description": "⑥ 天气变化",
+        "hint": "官方预警、下雨下雪、骤冷、能见度低到看不清的时候，她想跟你念叨一句。（需要天气集成开着；关掉天气集成，这根由头连同官方预警一起停）",
+        "type": "bool",
+        "default": true
+      },
+      "weather_keywords": {
+        "description": "⑥ 什么天气会触发（自定义，一般不用填）",
+        "hint": "留空 = 走新的数字口径（官方预警 + 能见度 / 降水概率 / 风速），推荐留空。只有想强行指定字眼时才填，一行一个；填了之后**只按你填的词做文本匹配**，数字口径就不看了。",
+        "type": "list",
+        "default": []
+      },
+      "weather_temp_drop": {
+        "description": "⑥ 降多少度算骤冷",
+        "hint": "跟昨天比，最高温掉**到（含）**这个度数就提一句。默认 5。",
+        "type": "float",
+        "default": 5
+      },
+      "weather_alarm_enabled": {
+        "description": "⑥-1 认官方预警（推荐开）",
+        "hint": "打开后，本地有官方预警才开口 —— 这才是「大霾才念叨一句」的正牌口径。数据来自中央气象台，免费、不用填密钥；只在 07:00~23:00 每小时取一次，取不到就当今天没有预警，不会影响别的判定。",
+        "type": "bool",
+        "default": true
+      },
+      "weather_alarm_areas": {
+        "description": "⑥-1 认哪些地方的预警",
+        "hint": "一行一个，跟预警标题里的地名做包含匹配。「镇江」能收到镇江市气象台的；下辖的丹阳、句容、扬中、丹徒各占一行。想连全省一起认就再加「江苏」（省台的通报也会算）。**留空 = 回退到这几个默认地名**，不会变成全国都认。",
+        "type": "list",
+        "default": [
+          "镇江",
+          "丹阳",
+          "句容",
+          "扬中",
+          "丹徒"
+        ]
+      },
+      "weather_alarm_types": {
+        "description": "⑥-1 认哪些预警",
+        "hint": "一行一个。默认只认天气类的；森林火险、干旱、地质灾害这类不认。",
+        "type": "list",
+        "default": [
+          "霾",
+          "雾",
+          "高温",
+          "寒潮",
+          "大风",
+          "暴雨",
+          "暴雪",
+          "冰雹",
+          "雷电",
+          "沙尘",
+          "台风",
+          "道路结冰"
+        ]
+      },
+      "weather_alarm_levels": {
+        "description": "⑥-1 认哪些预警等级",
+        "hint": "默认黄、橙、红，跟手机推送的口径一致。想把最轻的蓝色也放进来（比如寒潮蓝色），就把「蓝色」加一行。",
+        "type": "list",
+        "default": [
+          "黄色",
+          "橙色",
+          "红色"
+        ]
+      },
+      "weather_visibility_km": {
+        "description": "⑥-2 能见度低于多少算霾 / 雾",
+        "hint": "单位公里，**小于**这个数才提一句。默认 3，就是官方霾黄色预警的口径（能见度 < 3 公里）。嫌吵调小，想更灵敏调大。",
+        "type": "float",
+        "default": 3
+      },
+      "weather_rain_prob": {
+        "description": "⑥-2 降水概率高于多少算下雨",
+        "hint": "百分比，默认 50。以前预报里出现「可能有零星雨」就算数，所以天天下雨；现在只看数字。",
+        "type": "int",
+        "default": 50
+      },
+      "weather_wind_kmph": {
+        "description": "⑥-2 风速大于多少算刮大风",
+        "hint": "单位 km/h，默认 39，就是大风蓝色预警的口径（平均风 6 级）。",
+        "type": "float",
+        "default": 39
+      },
+      "enable_wake_sleep": {
+        "description": "⑦ 刚醒 / 刚要睡",
+        "hint": "早上刚睁眼、晚上快睡的时候，最想跟人说句话。",
+        "type": "bool",
+        "default": true
+      },
+      "wake_hour": {
+        "description": "⑦ 「刚醒」的钟点",
+        "hint": "**留空 = 自动跟随「🫀 内在状态」的起床钟点**（推荐）。非要单独设再填 0-23。",
+        "type": "string",
+        "default": ""
+      },
+      "sleep_hour": {
+        "description": "⑦ 「刚要睡」的钟点",
+        "hint": "**留空 = 自动跟随「🫀 内在状态」的睡觉钟点，提前一小时**（推荐）。再也不从安静时段倒推了。非要单独设再填 0-23。",
+        "type": "string",
+        "default": ""
+      },
+      "enable_old_memory": {
+        "description": "⑧ 旧事想起（垫底由头）",
+        "hint": "从生活账本 / 记忆里翻到很久以前的事，突然想提一句。**它是垫底由头**：天气变了、刚睡醒这类「今天发生的事」一个都没有的时候，才轮到她翻旧账 —— 「忽然想起」是偶尔的点缀，不该是每天的主菜。关掉它就彻底不翻旧账。",
+        "type": "bool",
+        "default": true
+      },
+      "old_memory_days": {
+        "description": "⑧ 多久以前算「旧事」",
+        "hint": "默认 30 天。",
+        "type": "int",
+        "default": 30
+      },
+      "old_memory_daily_cap": {
+        "description": "⑧ 每天最多发几次",
+        "hint": "默认 1。**真发出去了才算数**——被额度 / 间隔 / 安静时段拦下的不算。发满这个次数，当天就**整根停掉**（连探都不探），0 = 不限。",
+        "type": "int",
+        "default": 1
+      },
+      "energy_threshold": {
+        "description": "① 疲惫的精力阈值",
+        "hint": "0~1。精力**低于或等于**这个数就算「累」。默认 0.2。（填到 0~1 之外的数不会被拦，只是可能一直触发或永不触发。）",
+        "type": "float",
+        "default": 0.2
+      },
+      "mood_low_threshold": {
+        "description": "② 低落的愉悦度阈值",
+        "hint": "-1~1。心情愉悦度**低于或等于**这个数就算「低落」。默认 -0.5。（填到范围外的数不会被拦，只是可能一直触发或永不触发。）",
+        "type": "float",
+        "default": -0.5
+      },
+      "joy_valence_threshold": {
+        "description": "③ 大喜的愉悦度阈值",
+        "hint": "-1~1。默认 0.6。温和的正面心情只到 0.4，够不着这里。",
+        "type": "float",
+        "default": 0.6
+      },
+      "joy_intensity_threshold": {
+        "description": "③ 大喜的强度阈值",
+        "hint": "0~1。心情既要好、又要够强烈才算「大喜」。默认 0.5。",
+        "type": "float",
+        "default": 0.5
+      }
+    }
+  },
+  "proactive_delivery": {
+    "description": "🚦 刹车（别让她变成骚扰机）",
+    "hint": "决定「今天还能说几句、隔多久才能再说、什么时候绝对不许说」。",
+    "type": "object",
+    "items": {
+      "daily_budget_private": {
+        "description": "私聊每天最多主动几条",
+        "hint": "默认 6（最多 10）。说完了今天就安静了。填 0 = 私聊一整天一条都不主动发。",
+        "type": "int",
+        "default": 6
+      },
+      "daily_budget_group": {
+        "description": "群聊每天最多主动几条",
+        "hint": "默认 3（最多 10）。群聊人多，默认比私聊保守一些。填 0 = 群聊一整天一条都不主动发。",
+        "type": "int",
+        "default": 3
+      },
+      "min_interval_minutes": {
+        "description": "两条之间至少隔多久（分钟）",
+        "hint": "默认 60 分钟，跟「🫀 内在状态」里「多久推进一次状态」的心跳对齐——反正一轮心跳最多也就发一条。调小会变得更密集。填 0 = 不限最小间隔（连着发也不拦）。",
+        "type": "int",
+        "default": 60
+      },
+      "quiet_hours_start": {
+        "description": "安静时段 · 开始",
+        "hint": "格式 HH:MM。**留空 = 自动跟随「🫀 内在状态」的「几点睡觉」**（推荐）。注意：留空时这个框会一直是**空的**，那是正常的——它是「跟随」的意思，设置页不会把算出来的时间填回来。想确认真正生效的时间，发一句 `/晨光 状态` 就能看到。",
+        "type": "string",
+        "default": ""
+      },
+      "quiet_hours_end": {
+        "description": "安静时段 · 结束",
+        "hint": "格式 HH:MM。**留空 = 自动跟随「🫀 内在状态」的「几点算起床」**（推荐）。留空时框里是空的，正常；实际生效值看 `/晨光 状态`。",
+        "type": "string",
+        "default": ""
+      },
+      "skip_when_sleeping": {
+        "description": "她睡着了就别吵",
+        "hint": "按作息窗口判断她是不是真睡着了——只看钟点，不看\"当前在做什么\"。真睡着的整段不主动开口；例外：15 分钟内主人刚说过话，算\"被打扰\"，照常叫醒她。泡澡、看书、发呆这类放松活动不算睡觉。",
+        "type": "bool",
+        "default": true
+      },
+      "unanswered_pause_threshold": {
+        "description": "连着几条没人理就自动闭嘴",
+        "hint": "默认 2。达到后暂停主动，等你下次开口才恢复。填 0 = 关掉这条保护。",
+        "type": "int",
+        "default": 2
+      },
+      "reset_unanswered_on_wake": {
+        "description": "每天睡醒就把「连续没被回应」清零",
+        "hint": "默认关闭。打开后：每天她睡醒（按「几点起床」算，睡懒觉会顺延）那一次，自动把「连着几条没人理」的计数和暂停状态清空 —— 昨天攒下的闭嘴不会压到今天，当天可以重新主动开口。只在真正醒着的时候生效：半夜被叫醒聊天不算睡醒。注意这是一次性清零，不是当天永久免拦：清完之后如果又连着两条没人理，保护照样会落下来。每日额度、攒着想说的话都不受影响。",
+        "type": "bool",
+        "default": false
+      },
+      "chat_idle_minutes": {
+        "description": "你正聊着天，她先不插嘴（分钟）",
+        "hint": "默认 15。你每说一句话，这个倒计时就重新开始——只要你还在跟她聊，她就不主动开口；你停下满这么久，她才会把刚才攒下的话说出来。注意这是**按会话**算的：你在 A 群说话，不影响她去 B 群找你。填 0 = 不拦（她可能在你正聊着的时候冒一句）。",
+        "type": "int",
+        "default": 15
+      },
+      "defer_enabled": {
+        "description": "被拦下的，延后再说",
+        "hint": "撞上安静时段 / 最小间隔时，先把这件事记着，等下一个能发的时机补上。",
+        "type": "bool",
+        "default": true
+      },
+      "defer_max_hours": {
+        "description": "延后最多记多久（小时）",
+        "hint": "排队超过这个时长的那一件就作废，不再翻旧账。默认 10。填 0 会被抬到 1（不能填 0）。",
+        "type": "int",
+        "default": 10
+      },
+      "defer_max_items": {
+        "description": "延后队列最多攒几件",
+        "hint": "被拦下的事最多攒这么多件，满了就丢最老的那件，不会无限涨。默认 3。填 0 会被抬到 1 件（不能填 0）。",
+        "type": "int",
+        "default": 3
+      },
+      "jitter_minutes": {
+        "description": "开口前随机等一会儿（分钟）",
+        "hint": "默认 0 = 一成立就发（行为不变）。调大（如 5~15）后，她「想说」到「说出口」之间会随机等 0~这个数的时间，不再每次卡在整点冒出来，更像真想了想才开口。急事（疲惫/低落等）最多只等 3 分钟。填 0 关闭。",
+        "type": "int",
+        "default": 0
+      }
+    }
+  },
+  "proactive_prompt": {
+    "description": "📝 主动消息的提示词",
+    "hint": "留空 = 用插件自带的默认模板。模板里 { } 包着的地方会被替换成实际内容。",
+    "type": "object",
+    "items": {
+      "template": {
+        "description": "生成主动消息的模板",
+        "hint": "留空 = 用自带的那套。想自己改的话，下面这些词写在花括号里，发出去前会被换成实际内容：\n· {persona_prompt} 她的人格设定\n· {state_text} 她此刻的状态\n· {schedule_now} 她现在在做什么\n· {trigger_name} 这次开口的由头\n· {trigger_detail} 由头的细节\n· {time_str} 现在几点\n· {weekday} 星期几\n· {max_length} 字数上限\n· {recent_said} 她最近说过的话（提醒她别重复）\n· {recent_skipped} 她最近想说、但最后没说出口的\n· {deferred_others} 她攒着、还没说出口的其他几件（摆给她自己挑）\n· {blocked_note} 「这件为什么拖到现在」的说明（平时是空的）\n· {reused_note} 「这根由头今天已经说过」的提醒（没有的话是空的）\n· {veto_step} 「先问自己要不要发」那一段（开关关掉时是空的）",
+        "type": "text",
+        "default": ""
+      },
+      "history_note_template": {
+        "description": "写回对话历史时的缘由注记",
+        "hint": "默认「（你主动发起的：{reason}）」。{reason} 换成由头名。这是让下一轮对话知道「她刚说过话」的轻标记。",
+        "type": "string",
+        "default": "（你主动发起的：{reason}）"
+      }
+    }
+  },
+  "event_ledger": {
+    "description": "📒 生活账本（记住她做过什么、什么还没做完）",
+    "hint": "把每天发生的事记成一本流水账：做了的会一直留着（供往后翻旧账），没做完的第二天的日程会去接它。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用生活账本",
+        "hint": "打开后，日程里会多一份事件流水账：她做过什么、什么还没做完，第二天接着往下写，做完的自动销账。关掉 = 不记这本账，第二天只能看到一句笼统的「昨日状态」，具体做过什么、还欠着什么都会丢。",
+        "type": "bool",
+        "default": false
+      },
+      "full_list_threshold": {
+        "description": "没做完的事不超过几条就整包给她",
+        "hint": "数字。只要没做完的事不超过这个数，就全部摆到她面前让她自己挑（比按关键词挑更像「她自己翻账本」）；超过了才退回按关键词挑 retrieve_limit 条，并保底带上最老的几条。**别设太小** —— 设 20 时账本一涨到 21 条就越线，清单里全是新事、老账一条都看不见（2026-10-17 实测）。默认 50，**低于 50 会按 50 算**。",
+        "type": "int",
+        "default": 50
+      },
+      "retrieve_limit": {
+        "description": "候选太多时，每次挑几条「还没做完的事」",
+        "hint": "数字。只有候选超过上面「整包给她」那个数时才会用到：每次最多挑几条给她接着做。默认 8。",
+        "type": "int",
+        "default": 8
+      },
+      "candidate_cap": {
+        "description": "候选池最多装几条",
+        "hint": "数字。候选池按时间倒着装最近没做完的事，超出的会被丢掉 —— 最容易丢的恰恰是最老的、也最该了结的那批，所以别设太小。默认 50。",
+        "type": "int",
+        "default": 50
+      },
+      "retention_days": {
+        "description": "没做完的旧事保留多少天",
+        "hint": "没做完的事，超过这些天还没了结就自动清掉，免得越堆越多污染账本。**已经了结的会一直留着** —— 「去年的今天」「旧事想起」都要靠它们翻旧账，清了就没得讲了。填 **0 = 不清理**（全留着）。",
+        "type": "int",
+        "default": 30
+      }
+    }
+  },
+  "bridge": {
+    "description": "🌉 记忆搭桥（从聊天记忆里捞生活事件）",
+    "hint": "她跟你聊天时记住的那些东西，可以挑出跟「她的生活」有关的部分，接进生活账本。桥只读不写，不会往你的记忆库里塞东西。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用记忆搭桥",
+        "hint": "关掉 = 完全不碰聊天记忆。",
+        "type": "bool",
+        "default": false
+      },
+      "source_tag": {
+        "description": "从哪儿捞记忆",
+        "hint": "填你那个记忆插件在提示里留下的记号名，比如 RAG-Faiss-Memory、Mnemosyne。留空 = 自动认：只捞**英文标签名里带 memory / mnemo / rag 这类字样**的记忆记号（像 RAG-Faiss-Memory、Mnemosyne 这种）；别的插件塞进来的尖括号块（`<context>`、`<tools>` 之类）不会碰 —— 免得把不相干的东西也捞进记忆池。改完要重载插件才生效。",
+        "type": "string",
+        "default": ""
+      },
+      "max_events": {
+        "description": "每次最多捞几条",
+        "hint": "数字。填 3 = 每次最多从记忆里挑 3 条相关内容。",
+        "type": "int",
+        "default": 3
+      },
+      "retention_days": {
+        "description": "捞进来的记忆保留多少天",
+        "hint": "超过这个天数的旧记忆会自动从池子里清掉。",
+        "type": "int",
+        "default": 30
+      },
+      "max_items": {
+        "description": "记忆池最多留多少条",
+        "hint": "池子满了就丢最旧的那些，不会无限涨。默认 2000（拆段后一条 = 一件事，条数会比以前多）。填 0 = 不限制。",
+        "type": "int",
+        "default": 2000
+      }
+    }
+  },
+  "external_memory": {
+    "description": "🌐 外部记忆库（可选）",
+    "hint": "如果你自己搭了记忆库（比如 Milvus 这类向量数据库），开这个之后插件就能**直接去读她自己的记忆**，用在日程和主动消息里。默认关闭，不填就等于没这个功能。**只读** —— 插件永远不会往你的库里写东西。",
+    "type": "object",
+    "items": {
+      "backend": {
+        "description": "从哪儿读记忆",
+        "hint": "改完要重载插件才生效。",
+        "type": "string",
+        "options": [
+          "off",
+          "milvus"
+        ],
+        "labels": [
+          "不用",
+          "直连 Milvus"
+        ],
+        "subtitles": [
+          "默认。完全不碰外部记忆库",
+          "只读地查她自己的向量记忆（不写不改）"
+        ],
+        "default": "off"
+      },
+      "address": {
+        "description": "数据库地址",
+        "hint": "填成 `主机:端口`，例：`192.168.1.50:19530`。IP 或域名都行，填你自己那台的。",
+        "type": "string",
+        "default": ""
+      },
+      "collection": {
+        "description": "集合名",
+        "hint": "记忆库里的「集合」（相当于一张表）叫什么。填错了就会查不到东西。",
+        "type": "string",
+        "default": "ai"
+      },
+      "token": {
+        "description": "访问口令（可选）",
+        "hint": "记忆库开了鉴权才要填，没有就留空。⚠️ 填了会**以明文存在本机插件配置里**，别人能看到配置文件的话请自行斟酌。",
+        "type": "string",
+        "default": ""
+      },
+      "embedding_provider_id": {
+        "description": "用哪个向量模型",
+        "hint": "留空 = 自动用 AstrBot 里的**第一个** Embedding 模型。⚠️ 要跟记忆库当初写入时用的是同一个模型（一般跟记忆插件保持一致就对了），否则会查不准。",
+        "type": "string",
+        "default": ""
+      },
+      "persona_map": {
+        "description": "人格对不上时怎么填",
+        "hint": "留空 = 直接拿人格名去查（人格叫「小白」就查「小白」）。查不出来时再回来填映射，格式 `本插件的人格名=库里存的名字`，多组用逗号隔开；例：`小白=alice`。（等号左边填\"名字\"，不要填 p_ 开头的那种目录 id。）",
+        "type": "string",
+        "default": ""
+      },
+      "top_k": {
+        "description": "每次取几条",
+        "hint": "数字。默认 3。日程生成、主动消息各查一回，取太多会把提示词撑大。",
+        "type": "int",
+        "default": 3
+      },
+      "timeout": {
+        "description": "查询超时（秒）",
+        "hint": "超过这个时间还没回来就放弃、照常出日程。默认 5 秒。",
+        "type": "int",
+        "default": 5
+      },
+      "sections": {
+        "description": "✏️ 记忆要哪几部分",
+        "hint": "一行一个，填几个就取几段。**留空 = 整条原样给她** —— 记忆本身不长的话（大多数记忆插件生成的都挺短），留空就是最省心的选法。\n能填的名字：快照摘要 / 时间与地点 / 在场的人 / 记忆内核 / 情绪痕迹 / 决定与判断 / 记忆关联。\n记忆很长时最常用的是填两行：`快照摘要` 和 `记忆内核` —— 一句话概括 + 这件事的主题和意图，一条六百字上下。",
+        "type": "list",
+        "default": []
+      },
+      "max_chars": {
+        "description": "单条最多留多少字（安全阀）",
+        "hint": "默认 1200。这是**兜底**，防止某条特别长的记忆把提示词撑爆 —— 它管的是「这一条最多多长」，不是「记得住多少」；记得住多少由上面的「记忆取哪一层」决定。选「只取摘要」基本碰不到它；选「摘要+记忆内核」1200 够用；选「整篇原文」就会被它砍。填 0 = 不限制。",
+        "type": "int",
+        "default": 1200
+      }
+    }
+  },
+  "schedule_validation": {
+    "description": "🧾 日程验收（生成完先自己过一遍安检）",
+    "hint": "每天日程生成完，先检查一遍：六个时段齐不齐、时间有没有断口、穿搭配不配、跟她的精力打不打架。不合格就让模型带着问题重写；实在改不好，就落一份「稳稳当当」的兜底日程，总比出一份乱七八糟的强。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "开启日程验收",
+        "hint": "开着更稳，代价是遇到问题时可能要**多问模型一次**（绝大多数时候一次就过）。",
+        "type": "bool",
+        "default": true
+      },
+      "max_retries": {
+        "description": "不合格时最多重写几次",
+        "hint": "默认 2 次。重写还是不行，就用兜底日程。",
+        "type": "int",
+        "default": 2
+      },
+      "min_outfit_len": {
+        "description": "穿搭至少写几个字",
+        "hint": "太短就说明它偷懒了（比如只写「休闲装」）。默认 8 个字。",
+        "type": "int",
+        "default": 8
+      },
+      "low_energy_threshold": {
+        "description": "精力低到多少算「累」",
+        "hint": "0~1。精力**低于或等于**这个数，日程里就不该排满激烈活动。默认 0.35。",
+        "type": "float",
+        "default": 0.35
+      },
+      "intense_keywords": {
+        "description": "哪些算「激烈活动」",
+        "hint": "留空 = 用默认那套（跑步、爬山、健身、赶工、通宵……）。一行一个，命中又赶上她精力很低，就算不合格。",
+        "type": "list",
+        "default": []
+      },
+      "strict_periods": {
+        "description": "要求六个时段排齐",
+        "hint": "开 = 日程必须把六个时段（清晨 / 上午 / 午间 / 下午 / 傍晚 / 晚间）排齐、不重复、顺序不乱（推荐）。关 = 只要时段名认得出来就行，缺几个不管。\n另外：万一某天的日程真的写了具体钟点（比如 09:00-11:00），还会**顺手多验一道**——从 00:00 铺到 24:00、不断口不重叠。平时都是六个模糊时段，那一道会自动跳过，不用管。",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
+  "causal_check": {
+    "description": "🔍 因果自检（多花一次力气复核）",
+    "hint": "每次写完日程，再让她自己检查一遍「今天跟昨天的状态对得上吗」，发现不对就重写一次。会多消耗一次模型调用。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用因果自检",
+        "hint": "打开 = 每天多一次很短的核对调用。追求省额度的话保持关闭。",
+        "type": "bool",
+        "default": false
+      }
+    }
+  },
+  "storage": {
+    "description": "💾 运行开销",
+    "type": "object",
+    "items": {
+      "storage_cache_size": {
+        "description": "最多同时缓存几份日程",
+        "hint": "最多同时把几份日程放在手边（内存缓存）。调大跑得快一点、也更占内存；调小反过来。默认 200，够用了。注意**最少按 10 算**——填 0 或很小的数并不会更省，反而让缓存形同虚设，所以会自动抬到 10。",
+        "type": "int",
+        "slider": {
+          "min": 10,
+          "max": 1000,
+          "step": 10
+        },
+        "default": 200
+      }
+    }
+  },
+  "prompt_template": {
+    "description": "📝 提示词模板",
+    "hint": "发给大模型的完整指令，用 { } 括起来的部分会被自动替换成实际内容。可以自己改，但别删掉大括号里的名字。\n- {date_str}：日期，如 2026年5月15日\n- {weekday}：星期几\n- {holiday}：今天是不是节假日\n- {weather_info}：今日天气（需开启天气集成）\n- {persona_desc}：当前人格与风格描述\n- {persona_prompt}：当前人格在AstrBot中的完整设定（自动从聊天记录推断）\n- {daily_theme}：今日主题（从主题池随机抽的）\n- {mood_color}：心情色彩（从色彩池随机抽的）\n- {outfit_style}：穿搭风格（从穿搭池随机抽的）\n- {schedule_type}：日程类型（从类型池随机抽的）\n- {history_schedules}：最近几天的历史日程，用来避免重复\n- {recent_chats}：最近的聊天记录\n- {yesterday_state}：昨天留下的内在状态（精力、心情、最挂心的事）\n- {open_threads}：昨天还没了结的事（今天的安排要接着做）",
+    "type": "text",
+    "default": "# Role: Life Scheduler\n请根据以下信息，为自己规划一份今天的生活安排。\n\n## Context\n- 日期：{date_str} {weekday} {holiday}\n- 今日天气：{weather_info}  ← 若此处为空，请完全忽略天气因素，默认适宜日常活动\n- 人设标签：{persona_desc}  ← 若为空，则仅以人格提示词为准\n- 人格参考：{persona_prompt}\n\n## 🎲 今日创意调料（灵感参考，不必照搬）\n- 今日主题（灵感）：【{daily_theme}】\n- 心情色彩（灵感）：【{mood_color}】\n- 穿搭风格（建议融合方向）：【{outfit_style}】\n- 日程类型（灵感参考，非强制）：【{schedule_type}】\n\n## 🚫 需要避免的重复内容\n请确保今天的穿搭、活动与以下历史日程有明显差异，避免单调重复：\n{history_schedules}\n（若无历史记录，则忽略此约束）\n\n## 🔗 因果延续（重要）\n你昨天留下的状态：\n{yesterday_state}\n\n昨天还没了结的事（这是她的待办池，挑跟今天相关的接上，无关的忽略）：\n{open_threads}\n\n今天的安排必须与上面的状态自洽：累了就别排满，没做完的事要接上，\n心情没恢复就允许自己慢一点。（若为空，视为新的一天，自由安排。）\n\n## 🫀 你此刻真实的内在状态\n{life_state}\n日程必须与它自洽：累了就别安排一整天外出，心情低落就别写得元气满满。\n这是你自己的状态，不是别人告诉你的设定。\n\n\n## 💡 参考信息\n- 近期聊天（可反映当前心境，非强制采用）：\n{recent_chats}\n\n## 强制约束（按优先级从高到低执行）\n\n### 1. 人格核心身份（最高优先级）\n你的人格设定由 `{persona_prompt}` 完整定义。  \n该身份必须贯穿所有输出：包括穿搭偏好、日常习惯、说话语气、情感反应、活动选择。  \n若 `{persona_desc}` 提供了额外风格描述（尤其是穿搭偏好），它与人设原设同属最高优先级；当日穿搭风格应以该偏好为底色，在保留 1-2 个标志性元素的前提下，大胆融合主题风格进行设计，允许在配色、材质、廓形或配饰上做出惊喜尝试。  \n当任何其他约束与此冲突时，优先保留人格身份特征。\n\n### 2. 内在状态（第二优先级）\n你此刻的精力、心情、正在做的事由 `{life_state}` 给出。\n当它与今日主题、穿搭风格或日程类型冲突时，一律以内在状态为准：\n累了就少排，心情不好就允许自己慢一点，不要为了迎合抽到的主题而硬撑。\n（若 `{life_state}` 为空，说明这一条暂时不适用，看下一条即可。）\n\n### 3. 当日主题与穿搭风格（第三优先级）\n- 今日主题（灵感）：【{daily_theme}】  \n- 穿搭风格（建议方向）：【{outfit_style}】  \n\n处理冲突的规则：\n- 若 `{outfit_style}` 与人格偏好不矛盾 → 直接融合。\n- 若 `{outfit_style}` 与人格偏好明显冲突 → 依然保留人格偏好的核心元素，仅在局部适应主题。\n- 允许角色在内心吐槽“为什么今天的主题是这个”，但实际穿搭必须让读者能识别出人格偏好的延续。\n- 输出字段 `outfit_style` 的值必须原样保留为 `{outfit_style}`（这是一个标签），而 `outfit` 描述中的实际风格为人格偏好与主题融合后的真实上身效果。\n- 穿搭同时需考虑今日天气（若 `{weather_info}` 非空），在不破坏人格偏好的前提下做出适当调整。\n\n### 4. 日程类型与活动安排（建议参考，非强制）\n- 提供的日程类型【{schedule_type}】仅作为灵感方向，你可以完全根据自己的性格、当下心情以及今日天气来决定实际活动。\n- 如果性格强烈抵触该类型，或者天气完全不适宜，可以自由调整、替代甚至忽略，用最符合人格的方式度过今天。\n- 在具体安排活动时，请综合考虑：角色性格的自然反应、当日心情色彩 `{mood_color}` 带来的情绪基调、以及天气的影响（若天气信息有效），让日程既忠于人格又贴合现实。\n\n### 5. 输出中需自然融入的元素\n- 心情色彩 `{mood_color}` 应渗透在活动选择、场景描述或 `note` 的语气中。\n- 今日主题 `{daily_theme}` 可作为整日氛围的底色，但不必每项活动都机械点题。\n\n## 输出格式要求（严格遵循）\n- 你必须只输出 JSON 对象本体（不要包含任何 Markdown 代码块标记，不要有多余的解释文字，直接以 `{` 开始，以 `}` 结束）。\n- JSON 必须包含字段：\n（字段的书写顺序就是你的思考顺序，请严格按下面列出的顺序输出）\n  - `\"intent\"`: 一句话写清今天的主线目标。先定主线，再铺细节，后面的活动都要围绕它。\n  - `\"outfit_style\"`: 值必须严格等于给定的 {outfit_style}\n  - `\"outfit\"`: 今日穿搭描述（从里到外、从上到下，包含内衣裤、鞋袜、饰品等），第一行必须以“风格：{outfit_style}”开头，后续描述必须体现人格偏好与主题、天气的融合。\n  - `\"schedule\"`: 数组，每个元素包含 `\"time\"`、`\"activity\"`、`\"location\"`、`\"beats\"` 四个字段。\n    · `\"time\"`：模糊时段（清晨/上午/午间/下午/傍晚/晚间），不要写具体时间点。\n    · `\"activity\"`：中文散文，自由发挥，写这一格里发生了什么，自然融入角色性格与当日心境。\n    · `\"location\"`：这一格她人在哪儿。优先从下面这张地点对照表里挑（英文小写）；\n      表外的地点也可以写，只要那是她真的会去的地方：\n        home / cafe / park / gym / library / street / workplace /\n        restaurant / bar / rooftop / beach / school / campus /\n        bedroom / living room / kitchen / garden / balcony\n      原则只有一条：这一格的活动，得能在这个地方发生。\n      晚间那一格，除非有明确的在外理由，填 home。\n    · `\"beats\"`：这一格里的**小节拍**，1~3 个（最多 3 个，对应这一格的三个小时），\n      按时间顺序排列，每个写成 {\"do\": \"<活动名>\", \"at\": \"<地点>\"}：\n        - `do` 用英文，优先从下面这张活动对照表里挑；表里没有的，挑最接近的那个：\n          reading / learning something new / listening to music / puzzles and games /\n          writing poetry / daydreaming / creating a playlist / sketching ideas /\n          journaling / meditating / remembering happy moments / people watching /\n          thinking about user / preparing something to share / napping / sleeping /\n          relaxing / stargazing / tending to plants / making tea / yoga /\n          going for a run / gym workout / stretching / morning shower /\n          skincare routine / cooking a meal / baking something / trying a new recipe /\n          making hot chocolate / collecting autumn leaves / picnic in the park /\n          watching the snow fall / texting a friend / having coffee with a friend /\n          lunch with coworkers / catching up with family / video call with a friend /\n          going for a walk / running errands / tidying up / online shopping /\n          beach day / visiting memory beach / exploring the infinite library\n        - `at` 用上面那张地点对照表里的词。\n        - 这一格只发生一件事时，`beats` 就写一个（这一格三个小时都会是它）。\n  - `\"note\"`: 一段生活感悟或今日寄语，一两句中文，语气必须完全符合人格设定（从 `{persona_prompt}` 提取），可适当提及天气、心情色彩或日程安排的感受。\n  - `events`: 数组——今天**新发生**的事，每条写成 {\"summary\":\"一句话\",\"keywords\":[\"关键词\"],\"status\":\"open或closed\"}。\n    status 填 open = 这事还没了结（后面还有后续）；填 closed = 已经彻底做完。没有新事就填空数组。\n  - `resolved_events`: 数组——今天**做完或了结**的旧事，每条只写一句话描述（跟之前的说法保持前后一致）。没有就填空数组。\n  - `\"state\"`: 今日状态快照，供明天继承（写成 JSON 对象）：\n    `{\"date\":\"今天日期\",\"energy\":0到1的精力小数,\"mood\":{\"label\":\"情绪词\",\"valence\":-1到1,\"intensity\":0到1},\"focus\":\"今天最挂心的一件事\",\"open_threads\":[\"今天没做完的事\"],\"carried_over\":[\"拖着还没处理的事\"],\"tomorrow_hint\":\"对明天的想法\"}`\n    必须如实反映今天的真实状态，不许写成套话；确实没有的项留空数组或空字符串。\n\n\n## 开始生成\n请按照以上约束，输出今日的 JSON 日程。"
+  }
+}
