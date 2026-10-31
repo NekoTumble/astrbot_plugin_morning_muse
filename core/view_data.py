@@ -274,7 +274,7 @@ def collect_switches(plugin) -> list[dict]:
     return switches
 
 
-async def collect_report(plugin) -> dict:
+async def collect_report(plugin, include_prompts: bool = True) -> dict:
     """「⚙️ 插件配置」+ `/晨光报告` 背后那一套。
 
     注意：这里**不复制粘贴**命令里的拼串逻辑，命令改成拿这份 dict 再拼。
@@ -329,7 +329,7 @@ async def collect_report(plugin) -> dict:
         all_ids = []
     report["persona_ids"] = [str(x) for x in all_ids]
 
-    for pid in report["persona_ids"]:
+    for pid in (report["persona_ids"] if include_prompts else []):
         try:
             prompt = await plugin.context_builder._get_persona_prompt(pid)
             report["prompt_status"].append(
@@ -390,6 +390,12 @@ async def build_overview(plugin, persona_id: str = "") -> dict:
             style = ""
         personas.append({"id": item, "style": style})
 
+    # 页面只用到「开关 / 作息 / 模型 / 今日生成状态」，其余字段（日志、人格提示词状态、
+    # 静态人格表…）是给 /晨光报告 用的，别塞进页面响应：包更小，也少一层暴露面。
+    config = await collect_report(plugin, include_prompts=False)
+    for drop in ("logs", "prompt_status", "persona_ids", "static_personas", "dynamic_styles"):
+        config.pop(drop, None)
+
     return {
         "ok": True,
         "today": today.isoformat(),
@@ -403,7 +409,7 @@ async def build_overview(plugin, persona_id: str = "") -> dict:
         "personas": personas,
         "schedule": await build_schedule_view(plugin, pid, now=now),
         "status": await collect_status(plugin, pid),
-        "config": await collect_report(plugin),
+        "config": config,
     }
 
 

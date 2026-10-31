@@ -210,13 +210,14 @@ class ScheduleGenerator:
         # Step 2 结构化标签兜底：location / beats 归一 + 缺失兜底（见施工方案）
         schedule_data = self._normalize_schedule_tags(schedule_data)
 
-        # J1 · 本地环境参考：开了之后模型会写真实店名，所以生成完再过滤一道住址级信息
-        # （门牌号/小区名/精确距离）。总开关关着时这里直接返回 0，与没做这功能时一致。
-        if schedule_data:
-            local_geo.scrub_schedule(self.plugin, schedule_data)
-
         # 统一补 state 块：LLM 没给就按规则从日程文本兜一个，保证明天有东西可继承
         schedule_data = self._attach_state(schedule_data, persona_id, today)
+
+        # J1 · 本地环境参考：开了之后模型会写真实店名，所以落盘前再过一道住址级信息过滤
+        # （门牌号/小区名/精确距离）。放在 _attach_state 之后，是为了连它顺手补的
+        # state 字段也一起过一遍。总开关关着时返回 0，与没做这功能时一致。
+        if schedule_data:
+            local_geo.scrub_schedule(self.plugin, schedule_data)
 
         try:
             await self.storage.save_schedule(persona_id, today, schedule_data)

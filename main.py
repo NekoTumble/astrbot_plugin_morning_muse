@@ -25,8 +25,6 @@ from .core.generator import ScheduleGenerator
 from .core.life_bridge import (
     LifeBridgeManager,
     activity_zh,
-    energy_zh,
-    location_zh,
     mood_zh,
 )
 from .core.external_memory import ExternalMemory
@@ -859,6 +857,12 @@ class MorningMusePlugin(Star):
         self._view_rewrite_at[persona] = now
         try:
             ok, note, schedule = await regenerate_today(self, persona)
+        except Exception as e:
+            # regenerate_today 自己会吞大部分异常，这里再兜一层：
+            # 页面永远能拿到一句人话，不会变成一个 500。
+            logger.warning(f"[晨光心语] 🖼 页面重写 {persona} 时抛异常: {e}")
+            self._view_rewrite_at.pop(persona, None)
+            return error_response(f"生成时出错：{type(e).__name__}: {e}")
         finally:
             self._view_rewrite_lock.discard(persona)
 

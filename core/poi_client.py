@@ -98,6 +98,15 @@ def _acceptable(name: str) -> bool:
     return bool(name) and len(name) <= 24 and not any(w in name for w in _SKIP_WORDS)
 
 
+def _short_hash(text: str) -> str:
+    """给 Key 算个短指纹用来做缓存键 —— 不把 Key 本身写进缓存文件。"""
+    if not text:
+        return "-"
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+
+
 class PoiClient:
     def __init__(self, plugin, data_dir: Path):
         self.plugin = plugin
@@ -118,22 +127,23 @@ class PoiClient:
         area = resolve_area(self.plugin)
         if not area:
             return []
-        if backend == "amap" and not str(
-            self.plugin.get_config("local_geo.amap_key", "") or ""
-        ).strip():
+        amap_key = str(self.plugin.get_config("local_geo.amap_key", "") or "").strip()
+        if backend == "amap" and not amap_key:
             return []          # 选了高德却没填 Key = 当没选（不报错、不打扰）
 
-        today = date.today().isoformat()
+        today = self._today()
+        # 缓存指纹带上「源 + 地址 + Key 的短指纹」：换了 Key 就不必等明天才重查
+        fingerprint = f"{backend}|{area}|{_short_hash(amap_key)}"
         cached = self._load_cache()
         if (
             cached
             and cached.get("date") == today
-            and cached.get("area") == area
-            and cached.get("backend") == backend
-            and cached.get("v") == 2
+            and cached.get("fingerprint") == fingerprint
+            and cached.get("v") == 3
         ):
             return list(cached.get("items") or [])
 
+        failed = False
         try:
             if backend == "amap":
                 items = await self._query_amap(area)
@@ -143,13 +153,23 @@ class PoiClient:
             # 不把地址原文写进日志
             logger.info(f"[晨光心语] 📍 本地地点参考：查询失败已跳过（{type(e).__name__}）")
             items = []
+            failed = True
 
-        # 查不到也缓存「今天这个地址没有结果」，免得每次生成都去打接口（配额很贵）
-        self._save_cache(
-            {"v": 2, "date": today, "area": area, "backend": backend, "items": items,
-             "ts": int(time.time())}
-        )
+        # 只在「接口真的答话了（哪怕是空结果）」时缓存：网络抽风不缓存，
+        # 免得一次失败把一整天都定成「没有地点」。
+        if not failed:
+            self._save_cache(
+                {"v": 3, "date": today, "fingerprint": fingerprint, "items": items,
+                 "ts": int(time.time())}
+            )
         return items
+
+    def _today(self) -> str:
+        """按插件配置的时区取今天（跟日程文件用同一个「今天」）。"""
+        try:
+            return self.plugin._get_today().isoformat()
+        except Exception:
+            return date.today().isoformat()
 
     # ── 缓存 ────────────────────────────────────────────────
     def _load_cache(self) -> dict | None:
