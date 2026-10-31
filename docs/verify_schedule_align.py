@@ -32,8 +32,10 @@ from pathlib import Path
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLUGIN_DIR))
 
-# 离线自检引导：没有 AstrBot 时给插件模块一个最小 logger 替身
-# （插件本体统一 `from astrbot.api import logger`，不写回退分支；这里补上现场）
+# ⚠️ 本文件是**离线自检工具**，不属于插件运行时。
+#    插件本体（main.py / core/ / commands/）统一 `from astrbot.api import logger`，
+#    源码里没有任何 logging 调用；下面的 logger 替身只在「脱离 AstrBot 的环境里跑自检」时
+#    才会创建，插件正常运行时根本不会走到这里。
 try:
     import astrbot.api  # noqa: F401
 except ImportError:  # pragma: no cover - 只在脱离 AstrBot 的环境里走到

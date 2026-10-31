@@ -1,10 +1,12 @@
 name: astrbot_plugin_morning_muse
 display_name: 晨光心语
 author: NekoTumble
-version: 1.5.27
+version: 1.5.28
 description: 每日 AI 风格化日程 + 内在状态 + 主动消息，人格隔离，一键注入。
 homepage: https://github.com/NekoTumble/astrbot_plugin_morning_muse
 repo: https://github.com/NekoTumble/astrbot_plugin_morning_muse
+license: "GPL-3.0"
+category: "日程"
 astrbot_version: ">=4.24.2"
 support_platforms:
   - aiocqhttp
