@@ -17,6 +17,7 @@ from astrbot.core.agent.message import TextPart
 
 from .commands.debug import DebugCommands
 from .commands.schedule import PersonaCommands, ScheduleCommands
+from .core.poi_client import PoiClient
 from .core.config_defaults import schema_default
 from .core.context_builder import ContextBuilder
 from .core.event_ledger import EventLedger
@@ -183,6 +184,8 @@ class MorningMusePlugin(Star):
         # 插件页面（v1.5.29）：重写的防连点锁 + 每人格 60 秒节流
         self._view_rewrite_lock: set[str] = set()
         self._view_rewrite_at: dict[str, float] = {}
+        # J1：本地地点参考（高德周边搜索）；_async_init 里才真正创建
+        self.poi_client = None
 
         # 持有引用，防止未完成的任务被垃圾回收提前吃掉
         self._init_task = asyncio.create_task(self._async_init())
@@ -311,6 +314,14 @@ class MorningMusePlugin(Star):
                 levels=self.get_config("proactive_triggers.weather_alarm_levels", None),
                 tz_name=weather_tz,
             )
+
+            # J1：本地地点参考（高德 / OSM 周边搜索，可选）。没选数据源时它自己不查，
+            # 「本地环境参考」总开关关着时更是一行都不走。
+            try:
+                self.poi_client = PoiClient(self, data_dir)
+            except Exception as e:
+                self.poi_client = None
+                logger.warning(f"[晨光心语] ⚠️ 本地地点参考初始化失败（不影响生成）: {e}")
 
             # 主动消息引擎（P0）：把零件装上机器。这一步只打通「订阅 + 手动发一条」，
             # 自动触发要等接上心跳才开跑。

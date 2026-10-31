@@ -264,6 +264,13 @@ def collect_switches(plugin) -> list[dict]:
     for row in switches:
         if row["key"] == "weather.weather_enabled" and row["on"] and city:
             row["extra"] = city
+
+    # 本地环境参考：开着的话把「附近的地方从哪查」也标出来（只显示，不在这里改）
+    backend = str(plugin.get_config("local_geo_map", "off") or "off").strip().lower()
+    label = {"amap": "高德", "osm": "OSM"}.get(backend, "")
+    for row in switches:
+        if row["key"] == "enable_local_geo" and row["on"] and label:
+            row["extra"] = label
     return switches
 
 

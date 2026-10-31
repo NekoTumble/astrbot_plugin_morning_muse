@@ -489,7 +489,17 @@ class ContextBuilder:
         persona_prompt = await self._get_persona_prompt(persona_id)
 
         # J1 · 本地现实地址参考（默认关）：关着时这里是空串，后面一个字都不会动
-        local_geo_text = build_local_geo_text(self.plugin)
+        local_geo_text = ""
+        if self.plugin.get_config("enable_local_geo", False):
+            pois = []
+            poi_client = getattr(self.plugin, "poi_client", None)
+            if poi_client is not None:
+                try:
+                    # 一天最多查一次（自己带缓存）；没填 Key / 查不到 都是空列表，不报错
+                    pois = await poi_client.day_pois()
+                except Exception as e:
+                    logger.debug(f"[晨光心语] 本地地点查询跳过: {e}")
+            local_geo_text = build_local_geo_text(self.plugin, pois)
 
         prompt_template = self.plugin.get_config("prompt_template", "")
         if not prompt_template:

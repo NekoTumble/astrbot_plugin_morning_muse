@@ -1,30 +1,30 @@
 """J1 · 本地现实地址参考（带开关、默认关）。
 
-一句话：让她排活动时知道「自己现实里在哪座城市、那边现在什么季节」，排出来贴合现实；
-**但绝不把这些写进日程正文，也不写进任何日志。**
+口径（2026-10-31 按主人要求改过一次，跟第一版相反）：
 
-边界（照 NAS 清单 §J 写的）：
+> **要「像活在现实里」**：日程里可以有真实店名、公园名、地标名，会去真的地方；
+> **但不许到住址级**：门牌号、楼栋单元、小区名、楼层、精确距离一律不出现 ——
+> 免得群友顺着日程问出他住哪、跑来"现实 PK"。
 
-- 默认关。关着的时候**整条链路一行都不走**，生成结果与开功能前逐字节一致。
-- 只描述能公开的环境层次：城市 + 季节气候感 + 可去的场所类型 + 距离感。
-- 不许出现：具体街道、门牌、楼栋、小区名、精确坐标。
-- 不调模型、不调任何外部接口，只往现有那次生成里多塞几十个字。
-- 日志只记「开/关」「已配置/未配置」，**原文不进日志**。
+所以红线分两半：**名字可以真，地址必须虚**。
 
-三个配置项（就三个）：
-    enable_local_geo   bool    总开关，默认 false
-    local_geo_area     str     城市（必填）+ 区/片区（可选）+ 附近地标（可选）
-                               留空则回退天气配置里的城市名
-    local_geo_hint     str     可选，一句话说她和这片地方的关系
+数据从哪来（三层，越往下越具体）：
+
+1. 手填清单 `local_geo_places`（最可靠，零外部请求）
+2. 地图周边搜索（可选，高德要 Key / OSM 免费；一天最多一次，见 core/poi_client.py）
+3. 都为空时，交给模型的城市常识 —— 同时要求「拿不准就说得模糊些」
+
+另外带一道**代码侧过滤** `scrub_*`：生成完扫一遍正文，命中门牌号一类就抹掉。
+这道过滤有自己的开关 `local_geo_scrub`（默认开），且**总开关关着时它也不跑**。
 """
 
 import datetime
+import re
 
 from astrbot.api import logger
 
 # 占位符里那份画像的「标记句」：用来判断模板里是不是已经有这一段，避免补两次
 MARK = "她现实里在"
-BLOCK_TAG = "当前提示词模板里没有 {local_geo}"
 
 # 月份 → 季节说法（北半球、中文习惯；不追求节气精度，够当氛围底色就行）
 _MONTH_SEASON = {
@@ -32,13 +32,53 @@ _MONTH_SEASON = {
     7: "盛夏", 8: "夏末", 9: "初秋", 10: "深秋", 11: "深秋末", 12: "初冬",
 }
 
+# ── 门牌号一类的过滤规则 ─────────────────────────────────────────────
+# 只认阿拉伯数字（「三层楼」「一层薄雾」这种中文数字是正常描写，别误伤）
+# 「3 号桌」「16°C」「21:30」这类不是住址，也别动 —— 所以不单认「号」，
+# 要么是「号楼/号院/号房」，要么是「路/街/巷 … 12 号」这种带路名的。
+_SCRUB_PATTERNS = (
+    (re.compile(r"[0-9０-９]+\s*(?:号楼|号院|号房|栋|幢|单元|室|楼|层)"), "附近"),
+    (re.compile(r"(?:路|街|道|巷|村|里|弄)\s*[0-9０-９]+\s*号"), "附近"),
+    (re.compile(r"[0-9０-９]+\s*(?:弄|胡同)"), "附近"),
+    # 「XX小区」整段换掉：从「小区」往前吃到标点/空格为止
+    (re.compile(r"[\u4e00-\u9fffA-Za-z0-9]{1,12}\s*小区"), "住处附近"),
+    (re.compile(r"门牌(?:号|号码)?"), ""),
+    (re.compile(r"距(?:离)?\s*(?:我)?家?\s*[0-9０-９]+\s*(?:米|公里|千米|km|m)"), "走几步就到"),
+)
+
+# 连着抹两处会留下「附近 附近」，收一下尾
+_COLLAPSE = (
+    re.compile(r"(?:附近|住处附近)[ \u3000]*(?:附近|住处附近)"),
+    re.compile(r"[ \u3000]{2,}"),
+)
+
+# 要过一遍过滤的文本字段（顶层）
+_TEXT_FIELDS = ("intent", "note")
+# state 块里也要过（这些同样会被注入到对话里）
+_STATE_FIELDS = ("focus", "tomorrow_hint")
+_STATE_LISTS = ("open_threads", "carried_over")
+
 
 def _season_of(month: int) -> str:
     return _MONTH_SEASON.get(int(month), "")
 
 
-def build_text(plugin) -> str:
-    """渲染那段「环境画像」。开关关着、或地址空着 → 返回空字符串（调用方什么都别做）。"""
+def _manual_places(plugin) -> list[str]:
+    """手填的「常去的地方」。一行一个，也认中英文逗号/顿号分隔。"""
+    raw = str(plugin.get_config("local_geo_places", "") or "").strip()
+    if not raw:
+        return []
+    parts = re.split(r"[,，、;；\n]+", raw)
+    out: list[str] = []
+    for p in parts:
+        name = p.strip().strip("-· ")
+        if name and name not in out:
+            out.append(name)
+    return out[:10]
+
+
+def build_text(plugin, pois: list[dict] | None = None) -> str:
+    """渲染那段「环境画像」。总开关关着 → 返回空串（调用方什么都别做）。"""
     try:
         if not plugin.get_config("enable_local_geo", False):
             return ""
@@ -47,10 +87,10 @@ def build_text(plugin) -> str:
 
     area = str(plugin.get_config("local_geo_area", "") or "").strip()
     if not area:
-        # 留空 → 回退天气配置里的城市名（现在那个字段填的是英文城市名，够用）
+        # 留空 → 回退天气配置里的城市名
         area = str(plugin.get_config("weather.weather_location", "") or "").strip()
     if not area:
-        logger.info("[晨光心语] 📍 本地环境参考开着，但没有城市（local_geo_area 与天气城市都空），本次不注入")
+        logger.info("[晨光心语] 📍 本地环境参考开着，但没有地址（local_geo_area 与天气城市都空），本次不注入")
         return ""
 
     hint = str(plugin.get_config("local_geo_hint", "") or "").strip()
@@ -62,27 +102,112 @@ def build_text(plugin) -> str:
     season = _season_of(today.month)
 
     lines = [
-        "## 📍 她所在的地方（只作氛围参考，不是指令）",
-        f"- {MARK}{area}。",
-        f"- 现在是 {today.month} 月，{season}。那一带的气候按常理推断就好，别编出反季节的天气。",
-        "- 附近能去的地方就写在上面那句里；距离感大概是步行十几分钟到半小时，要去远一点的得专门跑一趟。",
+        "## 📍 她所在的地方（氛围参考：名字可以真，住址必须虚）",
+        f"- {MARK}{area}。现在是 {today.month} 月，{season}。那一带的气候按常理推断就好，别编出反季节的天气。",
     ]
+
+    # 具体能去的地方：手填清单优先，其次是高德查到的
+    places = _manual_places(plugin)
+    auto = [p for p in (pois or []) if isinstance(p, dict) and str(p.get("name") or "").strip()]
+    lines.append("- 这一带真实存在、她可能会去的地方（**可以写它们的名字**，但不要加门牌号/详细地址）：")
+    if places:
+        for name in places:
+            lines.append(f"  · {name}")
+    for p in auto:
+        name = str(p.get("name") or "").strip()
+        bucket = str(p.get("bucket") or "").strip()
+        suffix = f"（{bucket}）" if bucket else ""
+        if places and name in places:
+            continue
+        lines.append(f"  · {name}{suffix}")
+    if not places and not auto:
+        lines.append(
+            "  · （没有具体清单）你知道这座城市的真实地标就写；拿不准的别硬编，说成「城东那家开了很多年的旧书店」这种也像真的。"
+        )
+
     if hint:
         lines.append(f"- 她跟这片地方的关系：{hint}")
+
     lines.append(
-        "- **红线**：这些只当氛围底色。日程正文（activity）、location、beats 的 at、note 里"
-        "**都不许**出现真实街道、门牌、楼栋、小区名或精确位置；"
-        "location 仍然用那张英文地点表，表外的地方只能用泛化说法（「城东那家旧书店」这种）。"
+        "- **红线（必须遵守）**：店名、公园名、地标名可以是真的；但**不许**出现门牌号、楼栋单元、"
+        "小区名、楼层、精确距离（「距我家 300 米」「3 号楼」都不行），也不许说「我家在 XX」。"
+        "location 字段仍用那张英文地点表，表外的具体地点只写名字、不写地址；"
+        "真被问到住哪，只说大概的区/片，别报能反查的门牌。"
     )
     return "\n".join(lines) + "\n"
 
 
-def ensure_block(prompt: str, text: str) -> str:
-    """模板里没有 {local_geo} 占位符时，把画像补进提示词。
+def scrub_address(text: str) -> tuple[str, int]:
+    """把一段文字里的住址级信息抹掉。返回 (新文本, 命中次数)。"""
+    if not text or not isinstance(text, str):
+        return text, 0
+    hits = 0
+    out = text
+    for pattern, replacement in _SCRUB_PATTERNS:
+        out, n = pattern.subn(replacement, out)
+        hits += n
+    if hits:
+        out = _COLLAPSE[0].sub("附近", out)
+        out = _COLLAPSE[1].sub(" ", out).strip()
+    return out, hits
 
-    补的位置尽量靠前（「## 开始生成」之前）；没有这个标题就追加到末尾。
-    已经有这段就一个字都不加。返回新 prompt。
+
+def scrub_schedule(plugin, data: dict) -> int:
+    """生成完之后过一遍：正文 / 寄语 / 主题 / state 里的住址级信息抹掉。
+
+    - 总开关关着 → 直接返回 0（与没做这功能时一模一样）
+    - `local_geo_scrub` 关着 → 也返回 0
+    返回命中次数（不记录原文，只记次数）。
     """
+    if not isinstance(data, dict):
+        return 0
+    try:
+        if not plugin.get_config("enable_local_geo", False):
+            return 0
+        if not plugin.get_config("local_geo_scrub", True):
+            return 0
+    except Exception:
+        return 0
+
+    total = 0
+
+    for item in data.get("schedule") or []:
+        if not isinstance(item, dict):
+            continue
+        item["activity"], n = scrub_address(str(item.get("activity") or ""))
+        total += n
+        for beat in item.get("beats") or []:
+            if isinstance(beat, dict):
+                beat["do"], n = scrub_address(str(beat.get("do") or ""))
+                total += n
+
+    for field in _TEXT_FIELDS:
+        if field in data:
+            data[field], n = scrub_address(str(data.get(field) or ""))
+            total += n
+
+    state = data.get("state")
+    if isinstance(state, dict):
+        for field in _STATE_FIELDS:
+            if field in state:
+                state[field], n = scrub_address(str(state.get(field) or ""))
+                total += n
+        for field in _STATE_LISTS:
+            if isinstance(state.get(field), list):
+                cleaned = []
+                for line in state[field]:
+                    new_line, n = scrub_address(str(line))
+                    total += n
+                    cleaned.append(new_line)
+                state[field] = cleaned
+
+    if total:
+        logger.info(f"[晨光心语] 📍 本地环境参考：抹掉了 {total} 处住址级信息（门牌/小区一类）")
+    return total
+
+
+def ensure_block(prompt: str, text: str) -> str:
+    """模板里没有 {local_geo} 占位符时，把画像补进提示词（补在「## 开始生成」之前）。"""
     if not text:
         return prompt
     if MARK in prompt:
