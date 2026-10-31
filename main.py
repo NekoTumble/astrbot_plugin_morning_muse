@@ -1387,8 +1387,16 @@ class MorningMusePlugin(Star):
                 sleeping = in_sleep_window(self, persona_id)
             except Exception:
                 sleeping = False
+            # 昨夜被打断了几回 —— 同一句话说不论第几次都一样，太假了
+            interrupts = 0
+            try:
+                if self.life_bridge is not None:
+                    interrupts = int(self.life_bridge.night_interrupt_count(persona_id) or 0)
+            except Exception:
+                interrupts = 0
             self._append_dynamic_context(
-                req, self._format_life_only(life_state, sleeping=sleeping)
+                req,
+                self._format_life_only(life_state, sleeping=sleeping, interrupts=interrupts),
             )
 
     # 六个模糊时段 → 大致钟点（和天气、状态机用的是同一套）
@@ -1470,7 +1478,8 @@ class MorningMusePlugin(Star):
             return "还算有劲"
         return "精神挺足"
 
-    def _format_life_only(self, life_state: dict, sleeping: bool = False) -> str:
+    def _format_life_only(self, life_state: dict, sleeping: bool = False,
+                         interrupts: int = 0) -> str:
         """只有「此刻」的一段上下文：今天这份日程还没生成时用（凌晨那段）。
 
         写法贴着角色去说事 —— 不列字段、不下硬命令，只交代她在哪、什么状态、
@@ -1491,13 +1500,35 @@ class MorningMusePlugin(Star):
             where = "家里"
             if place and place not in ("家", "家里"):
                 where = f"家里（{place}）" if "家" in place else f"家里的{place}"
-            lines.append(f"你正睡着：{where}，灯关着，屋里的声音慢慢的。")
+            n_wake = max(0, int(interrupts or 0))
+            if n_wake <= 0:
+                lines.append(f"你正睡着：{where}，灯关着，屋里的声音慢慢的。")
+            else:
+                lines.append(f"你从睡里被叫起来：{where}，灯还关着，屋里静得能听见自己的呼吸。")
             if energy:
                 lines.append(f"这一觉睡到现在，{energy}。")
-            lines.append(
-                "要是这会儿被叫醒，你是从睡里被拽出来的 —— 眼皮发沉，声音里还带着没散开的困，"
-                "别一下子清醒得像白天；想赖一会儿、想含糊应一声，都可以。"
-            )
+            n = n_wake
+            if n <= 0:
+                # 还没被吵过：写成"假设"，别替她预演
+                lines.append(
+                    "要是这会儿被叫醒，你是从睡里被拽出来的 —— 眼皮发沉，声音里还带着没散开的困，"
+                    "别一下子清醒得像白天；想赖一会儿、想含糊应一声，都可以。"
+                )
+            elif n == 1:
+                lines.append(
+                    "这会儿被叫醒了 —— 你是从睡里被拽出来的：眼皮发沉，声音里还带着没散开的困，"
+                    "别一下子清醒得像白天；想赖一会儿、想含糊应一声，都可以。"
+                )
+            elif n <= 3:
+                lines.append(
+                    f"又醒了。这一夜已经被叫起来 {n} 回，睡意被搅得零零碎碎 —— "
+                    "心里有点闷，回话可以短一点、慢一点，不用强行清醒，也懒得解释自己困。"
+                )
+            else:
+                lines.append(
+                    f"又被叫起来了（这一夜第 {n} 回）。这一夜基本没连贯地睡过，人是飘的、脾气也短，"
+                    "说话带着没睡够的那种钝和一点不耐烦；不用抱歉，也不必装出温柔。"
+                )
         else:
             where = place or ""
             if activity and where:
