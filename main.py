@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 import os
+import time
 from pathlib import Path
 
 import aiofiles
@@ -11,6 +12,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
+from astrbot.api.web import error_response, json_response, request
 from astrbot.core.agent.message import TextPart
 
 from .commands.debug import DebugCommands
@@ -34,11 +36,22 @@ from .core.proactive_store import (
     SubscriptionStore,
     format_skipped_line,
 )
+from .core.schedule_text import strip_legacy_period_prefix
 from .core.scheduler import MorningScheduler
 from .core.state_store import StateStore
 from .core.storage import ScheduleStorage
 from .core.timezone_utils import get_now, get_today, set_default_tz
+from .core.view_data import (
+    build_overview,
+    collect_status,
+    period_index_of,
+    regenerate_today,
+    render_status_text,
+)
 from .core.weather_client import AlarmClient, WeatherClient, aclose_client
+
+# 插件标识：页面接口的路由前缀就用它（AstrBot 的插件页面 SDK 会按这个拼地址）
+PLUGIN_NAME = "astrbot_plugin_morning_muse"
 
 
 def _collect_memory_texts(req) -> list[str]:
@@ -166,6 +179,9 @@ class MorningMusePlugin(Star):
         self.subscriptions: SubscriptionStore | None = None
         self.proactive_state: ProactiveState | None = None
         self.proactive: ProactiveEngine | None = None
+        # 插件页面（v1.5.29）：重写的防连点锁 + 每人格 60 秒节流
+        self._view_rewrite_lock: set[str] = set()
+        self._view_rewrite_at: dict[str, float] = {}
 
         # 持有引用，防止未完成的任务被垃圾回收提前吃掉
         self._init_task = asyncio.create_task(self._async_init())
@@ -343,6 +359,8 @@ class MorningMusePlugin(Star):
                 )
 
             self._ready = True
+            # 插件页面接口：放在 _ready 之后挂，页面一打开就取得到数
+            self._register_view_api()
             logger.info("✅ 晨光心语插件已初始化")
         except Exception as e:
             logger.error(f"❌ 插件初始化失败: {e}", exc_info=True)
@@ -735,89 +753,123 @@ class MorningMusePlugin(Star):
         return self.get_config("persona_styles.style_control_default", "自然亲切的语气")
 
     # ---------- 命令 ----------
+    # ---------- 插件页面（v1.5.29 · views/晨光心语/） ----------
+    #
+    # 入口是插件卡片上的「插件页面」，页面只负责取数 + 渲染，业务逻辑全在这边：
+    #   · 两个读接口（今日日程 / 此刻状态 / 插件配置，一次取全）
+    #   · 一个写接口（重写单人今日日程，等价 /重写日程，绝不碰 /重写所有人）
+    # 路由前缀必须是 /{插件名}/...，AstrBot 的页面 SDK 会把它拼成
+    # /api/v1/plugins/extensions/{插件名}/{endpoint}，前端那边只写 'view/overview'。
+
+    VIEW_REWRITE_COOLDOWN = 60  # 同一人格两次重写至少隔 60 秒
+
+    def _register_view_api(self) -> None:
+        routes = (
+            (
+                f"/{PLUGIN_NAME}/view/overview",
+                self.page_view_overview,
+                ["GET"],
+                "晨光心语：插件页面取数（只读）",
+            ),
+            (
+                f"/{PLUGIN_NAME}/view/rewrite",
+                self.page_view_rewrite,
+                ["POST"],
+                "晨光心语：重写当前人格的今日日程",
+            ),
+        )
+        mounted = 0
+        for route, handler, methods, desc in routes:
+            try:
+                self.context.register_web_api(route, handler, methods, desc)
+                mounted += 1
+            except Exception as e:
+                # 挂不上不影响命令：页面进不去，但 /查看日程 这些照旧
+                logger.warning(f"[晨光心语] ⚠️ 页面接口注册失败（不影响命令）：{e}")
+        if mounted:
+            logger.info(f"[晨光心语] 🖼 插件页面接口已就绪（{mounted}/{len(routes)}）")
+
+    async def page_view_overview(self):
+        """页面一打开取一次：人格清单 + 今日日程 + 此刻状态 + 配置概览。"""
+        if not self._ready:
+            return error_response("插件还在初始化，等几秒再刷新")
+        persona = str(request.query.get("persona", "") or "").strip()
+        try:
+            data = await build_overview(self, persona)
+        except Exception as e:
+            logger.warning(f"[晨光心语] 🖼 页面取数失败: {e}")
+            return error_response(f"取数失败：{type(e).__name__}: {e}")
+        return json_response(data)
+
+    async def page_view_rewrite(self):
+        """重写一个人格的今日日程 —— 会真花一次模型调用，所以三道闸门。
+
+        闸门：① 只认活跃人格 ② 正在生成时不许再点 ③ 同人格 60 秒内只放一次。
+        失败一律把原因照实回给页面，绝不静默当成功。
+        """
+        if not self._ready or self.generator is None:
+            return error_response("插件还在初始化，等几秒再试")
+
+        payload = await request.json(default={})
+        if not isinstance(payload, dict):
+            return error_response("请求体必须是 JSON 对象")
+
+        persona = str(payload.get("persona", "") or "").strip()
+        if not persona:
+            return error_response("没说要重写哪个人格（页面没传 persona）")
+
+        try:
+            active = [str(x) for x in (await self._get_active_persona_ids() or [])]
+        except Exception as e:
+            logger.warning(f"[晨光心语] 🖼 取活跃人格失败: {e}")
+            active = []
+        if persona not in active:
+            return error_response("这个人格不在活跃名单里（可能已经在 AstrBot 里关掉了）")
+
+        if persona in self._view_rewrite_lock:
+            return error_response("正在生成中，等它跑完喵")
+
+        now = time.monotonic()
+        left = self.VIEW_REWRITE_COOLDOWN - (now - self._view_rewrite_at.get(persona, 0.0))
+        if left > 0:
+            return error_response(f"刚重写过，{int(left) + 1} 秒后再点")
+
+        self._view_rewrite_lock.add(persona)
+        self._view_rewrite_at[persona] = now
+        try:
+            ok, note, schedule = await regenerate_today(self, persona)
+        finally:
+            self._view_rewrite_lock.discard(persona)
+
+        if not ok:
+            # 失败了让人能立刻重试，不被那 60 秒卡着
+            self._view_rewrite_at.pop(persona, None)
+            logger.warning(f"[晨光心语] 🖼 页面重写 {persona} 失败：{note}")
+            return error_response(note)
+
+        logger.info(f"[晨光心语] 🖼 页面重写了 {persona} 的今日日程")
+        return json_response(
+            {
+                "ok": True,
+                "persona": persona,
+                "message": note,
+                "schedule": schedule,
+            }
+        )
+
     @filter.command("状态", desc="查看当前人格的内在状态（精力 / 心情 / 此刻在做什么）")
     async def show_state(self, event: AstrMessageEvent):
         if not self._ready:
             yield event.plain_result("✅ 插件仍在初始化，请稍后重试～")
             return
         persona_id = await self._get_persona_id(event)
-        lines = []
-
-        live = None
-        if self.life_bridge is not None and self.get_config("life_engine.enabled", False):
-            try:
-                # force=True：这是主人手敲 /状态，要的是**此刻**，绕过 40 秒缓存
-                live = await self.life_bridge.get_state(persona_id, force=True)
-            except Exception as e:
-                logger.warning(f"[晨光心语] {persona_id} 读取状态失败: {e}")
-
-        if live:
-            lines.append(f"🫀 {persona_id} 的此刻状态")
-            lines.append("━━━━━━━━━━━━━━━━━━")
-            lines.append(
-                f"精力：{live.get('energy')}"
-                f"（实际 {live.get('energy_effective', live.get('energy'))}"
-                f" · {energy_zh(live.get('energy_label', ''))}）"
-            )
-            lines.append(f"心情：{mood_zh(live.get('mood', ''))}（强度 {live.get('mood_intensity')}）")
-            if live.get("current_activity"):
-                lines.append(f"此刻在做：{activity_zh(live['current_activity'])}")
-            if live.get("location"):
-                lines.append(f"所在：{location_zh(live['location'])}")
-            if live.get("goals"):
-                lines.append("惦记的目标：" + "；".join(live["goals"]))
-            if live.get("thought"):
-                lines.append(f"脑子里在想：{live['thought']}")
-            try:
-                shares = await self.life_bridge.shareable(persona_id, limit=3)
-                if shares:
-                    lines.append("最近想说的：")
-                    for s in shares:
-                        lines.append(f"  · {s['content']}")
-            except Exception:
-                pass
-            # E2：把睡懒觉的因果摆到台面上（昨晚被吵醒几次 → 今早多睡多久）
-            try:
-                lag = self.life_bridge.wake_lag_minutes(persona_id)
-                if lag > 0:
-                    woke = self.life_bridge.night_interrupt_count(persona_id)
-                    lines.append(f"🛌 昨晚被吵醒 {woke} 次，今早多睡了 {lag} 分钟")
-            except Exception:
-                pass
-        else:
-            lines.append(f"🫀 {persona_id} 的内在状态未开启")
-            lines.append("（可以在设置页打开「内在状态」，下面是日程里记着的状态）")
-
-        # Phase 0 的 state 块（开不开状态机都有）
+        # 取数在 core/view_data.py，插件页面的「此刻状态」读的是同一份 collect_status()
         try:
-            sched = await self.storage.load_schedule(persona_id, self._get_today())
-            state = (sched or {}).get("state") or {}
-            if state:
-                lines.append("")
-                lines.append("📌 今天记下的状态")
-                lines.append(StateStore.summarize(state))
-                threads = StateStore.threads_text(state, limit=3)
-                if threads:
-                    lines.append("还没了结的事：")
-                    lines.append(threads)
-            # 生活账本 / 记忆来源的规模（开了才显示）
-            try:
-                if self.event_ledger is not None:
-                    ls = await self.event_ledger.stats(persona_id)
-                    lines.append(f"📒 生活账本：共 {ls['total']} 条，还没了结 {ls['open']} 条")
-                if self.memory_source is not None:
-                    ms = await self.memory_source.stats(persona_id)
-                    if ms.get("external") and ms.get("external") != "off":
-                        mode = f"（{ms['external_mode']}）" if ms.get("external_mode") else ""
-                        lines.append(f"🌐 外部记忆库：{ms['external']}{mode}")
-                    if ms.get("pool"):
-                        lines.append(f"🌉 记忆池：{ms['pool']} 条（兜底）")
-            except Exception:
-                pass
+            data = await collect_status(self, persona_id)
         except Exception as e:
-            logger.warning(f"[晨光心语] {persona_id} 读取日程状态失败: {e}")
-
-        yield event.plain_result("\n".join(lines))
+            logger.warning(f"[晨光心语] {persona_id} 读取状态失败: {e}")
+            data = {"persona_id": persona_id, "live": None, "shares": []}
+        yield event.plain_result(render_status_text(data))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("状态重置", desc="把当前人格的内在状态重置为初始值")
@@ -1336,15 +1388,26 @@ class MorningMusePlugin(Star):
 
     @staticmethod
     def _period_index_of(hour: int) -> int:
-        """把 0~23 点钟映射到六个时段的第几段。"""
-        if hour < 4:
-            return 5   # 凌晨归到前一晚的「晚间」——深夜聊天时她该在收尾，不是新的一天刚开始
-        bounds = [4, 8, 11, 13, 17, 19]   # 各段起始钟点
-        idx = 0
-        for i, b in enumerate(bounds):
-            if hour >= b:
-                idx = i
-        return idx
+        """把 0~23 点钟映射到六个时段的第几段。
+
+        实现在 core/view_data.py（插件页面的「此刻高亮」用的是同一个函数），
+        这里只是保留老调用点。
+        """
+        return period_index_of(hour)
+
+    @staticmethod
+    def _activity_text(item: dict) -> str:
+        """这一格的正文。
+
+        H1 窄兼容：v1.5.29 之前生成的日程，正文开头可能还带着「晚间 · 」「晚间烟霾…」
+        这种自报时段的写法，渲染时再拼一次时段就重复了。提示词那边已经治本，
+        这里只管升级前落盘的老文件（见 core/schedule_text.py）。
+        """
+        if not isinstance(item, dict):
+            return ""
+        return strip_legacy_period_prefix(
+            str(item.get("activity") or ""), str(item.get("time") or "")
+        )
 
     def _format_for_injection(self, schedule: dict, life_state: dict = None) -> str:
         """把日程整理成一段上下文，交给本轮对话（不写 system_prompt）。
@@ -1357,7 +1420,7 @@ class MorningMusePlugin(Star):
             lines = ["[今日日程]"]
             lines.append(f"穿搭：{schedule.get('outfit', '')}")
             for item in schedule.get("schedule", []):
-                lines.append(f"- {item.get('time')}: {item.get('activity')}")
+                lines.append(f"- {item.get('time')}: {self._activity_text(item)}")
             note = schedule.get("note", "").strip()
             if note:
                 lines.append(f"寄语：{note}")
@@ -1385,7 +1448,7 @@ class MorningMusePlugin(Star):
         if past:
             lines.append("（今天早些时候，已经做过）")
             for item in past:
-                lines.append(f"- {item.get('time')}: {item.get('activity')}")
+                lines.append(f"- {item.get('time')}: {self._activity_text(item)}")
         lines.append("（此刻）")
         # 优先级对调：状态机才是「真·此刻」，日程那条降级成「原本的打算」。
         # 日程是早上一次写死的，状态机每小时都在动；不这样的话会出现
@@ -1397,18 +1460,18 @@ class MorningMusePlugin(Star):
                 # 别再把后者塞进括弧当注释（v1.5.27 按实测反馈拆平）。
                 lines.append(f"- 现在：{cur_act}")
                 lines.append(
-                    f"- 今天排的是：{here.get('time', '')} · {here.get('activity', '')}"
+                    f"- 今天排的是：{here.get('time', '')} · {self._activity_text(here)}"
                 )
             else:
                 lines.append(f"- 现在：{cur_act}")
         elif here:
-            lines.append(f"- {here.get('time')}: {here.get('activity')}")
+            lines.append(f"- {here.get('time')}: {self._activity_text(here)}")
         if life_state:
             lines.append(f"- 精力 {life_state.get('energy')}，心情 {mood_zh(life_state.get('mood', ''))}")
         if future:
             lines.append("（接下来）")
             for item in future:
-                lines.append(f"- {item.get('time')}: {item.get('activity')}")
+                lines.append(f"- {item.get('time')}: {self._activity_text(item)}")
         note = schedule.get("note", "").strip()
         if note:
             lines.append(f"寄语：{note}")

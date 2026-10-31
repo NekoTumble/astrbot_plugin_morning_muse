@@ -4,13 +4,13 @@ import re
 
 from ..core.generator import ScheduleGenerator
 from ..core.life_bridge import location_zh
+from ..core.schedule_text import period_emoji, place_text, strip_legacy_period_prefix
 from ..core.storage import ScheduleStorage
+from ..core.view_data import regenerate_today
 
 
-# 「家」是个容器：阳台 / 厨房 / 卧室这些都装在它里面。
-# 所以一段里如果同时列了「家」和屋里的细地点，就把那个笼统的「家」省掉。
-# 但「公园/家」这种要留着 —— 那是真的跑了两个地方。
-_HOME_SUB = {"balcony", "kitchen", "bedroom", "living room", "study nook", "garden"}
+# 「家」是个容器：阳台 / 厨房 / 卧室这些都装在它里面 —— 这条规则连词表一起
+# 搬到了 core/schedule_text.py（页面也要用同一份，免得两处各写一套）。
 
 
 class ScheduleCommands:
@@ -76,12 +76,17 @@ class ScheduleCommands:
         """只重写当前会话绑定的人格"""
         current_persona = await self.get_persona_id(event)
         recent = await self.get_recent_messages(event) if self.get_recent_messages else None
-
-        schedule = await self.generator.generate(current_persona, self.dynamic_styles, recent_messages=recent, force=True)
-        if schedule and not isinstance(schedule, Exception):
-            return f"已重新生成【{current_persona}】的日程。\n{self._format_schedule(schedule)}"
-        else:
-            return f"重写【{current_persona}】日程失败，请稍后重试。"
+        # 生成那一跳收进 core/view_data.py 了：命令和插件页面共用同一份，
+        # 免得以后两边行为悄悄跑偏（页面那个「重写」按钮走的是同一个函数）。
+        ok, note, schedule = await regenerate_today(
+            self.plugin, current_persona, recent_messages=recent
+        )
+        if ok and schedule is not None:
+            # 拿刚生成的原始数据重新排版，跟以前输出一致
+            fresh = await self.storage.load_schedule(current_persona, self._get_today())
+            body = self._format_schedule(fresh) if fresh else ""
+            return f"已重新生成【{current_persona}】的日程。\n{body}"
+        return f"重写【{current_persona}】日程失败，请稍后重试。\n（{note}）"
 
     async def cmd_regenerate_all(self, message, event):
         """全量重写所有人格的日程"""
@@ -139,47 +144,13 @@ class ScheduleCommands:
             return "时间格式错误，请使用 HH:MM。"
 
     def _get_time_emoji(self, time_str: str) -> str:
-        time_lower = time_str.lower()
-        emoji_map = {
-            "清晨": "🌄", "早晨": "🌅", "早上": "☀️",
-            "上午": "📌", "午前": "📌",
-            "中午": "🍽️", "午间": "🍽️", "午餐": "🍽️", "午后": "🍽️",
-            "下午": "🌤️",
-            "傍晚": "🌅", "黄昏": "🌇",
-            "晚上": "🌙", "晚间": "🌙", "深夜": "🌃",
-            "夜间": "🌃", "睡前": "🛌",
-        }
-        for keyword, emoji in emoji_map.items():
-            if keyword in time_lower:
-                return emoji
-        return "⏰"
+        # 挪到 core/schedule_text.py 了（页面也要用同一张对照表）
+        return period_emoji(time_str)
 
     @staticmethod
     def _place_text(item: dict) -> str:
-        """这一段的地点文字（给 /查看日程 用）。
-
-        优先取 `beats` 里的细地点（阳台 / 厨房 / 客厅这种，去重、按出现顺序），
-        beats 里没有才退回 `location`（家 / 图书馆）。
-        一个时段跑两个地方是常态（「上午：咖啡馆 → 图书馆」），所以用 `/` 串起来：
-        `阳台/厨房`、`咖啡馆/街上`。词表外的地方原样保留英文，不乱翻。
-        """
-        places: list[str] = []
-        for b in (item.get("beats") or []):
-            if not isinstance(b, dict):
-                continue
-            at = str(b.get("at") or "").strip()
-            if at and at not in places:
-                places.append(at)
-        if not places:
-            loc = str(item.get("location") or "").strip()
-            if loc:
-                places.append(loc)
-        # 「家 + 屋里的细地点」= 重复，省掉笼统的那个（「公园/家」这种照留）
-        if len(places) > 1 and "home" in places and all(
-            p in _HOME_SUB or p == "home" for p in places
-        ):
-            places.remove("home")
-        return "/".join(location_zh(p) for p in places)
+        """这一段的地点文字（给 /查看日程 用）。实现在 core/schedule_text.py。"""
+        return place_text(item, location_zh)
 
     def _format_schedule(self, data: dict) -> str:
         lines = []
@@ -194,7 +165,10 @@ class ScheduleCommands:
             for item in schedule:
                 if isinstance(item, dict):
                     time = item.get("time", "")
-                    activity = item.get("activity", "")
+                    # H1 窄兼容：升级前落盘的老日程，正文开头可能还带着时段
+                    activity = strip_legacy_period_prefix(
+                        str(item.get("activity") or ""), str(time or "")
+                    )
                     emoji = self._get_time_emoji(time)
                     place = self._place_text(item)
                     head = f"{emoji} {time}" + (f" · {place}" if place else "")

@@ -327,7 +327,7 @@ class WeatherClient:
 # 中央气象台这个接口免费、不用密钥，返回的正是手机推送那一套预警：
 #   GET http://www.nmc.cn/rest/findAlarm?pageNo=1&pageSize=500
 #   -> data.page.list[] = {title, issuetime, url, pic}
-#   title 形如「江苏省镇江市气象台发布霾黄色预警信号」
+#   title 形如「XX省XX市气象台发布霾黄色预警信号」
 #
 # 三个已知的坑，都绕过去了：
 #   1. 没有「按城市查」的参数（province / areaCode / stationid 实测全被忽略，
@@ -343,7 +343,7 @@ _ALARM_TITLE_RE = re.compile(
 
 # 设置页留空时回退到这几个 —— 刻意**不是**「全国都认」：
 # 宁可安静，也不要半夜为另一个省的霾开口。
-DEFAULT_ALARM_AREAS = ("镇江", "丹阳", "句容", "扬中", "丹徒")
+DEFAULT_ALARM_AREAS = ()
 DEFAULT_ALARM_TYPES = ("霾", "雾", "高温", "寒潮", "大风", "暴雨", "暴雪",
                        "冰雹", "雷电", "沙尘", "台风", "道路结冰")
 DEFAULT_ALARM_LEVELS = ("黄色", "橙色", "红色")

@@ -15,6 +15,21 @@ try:
 except ImportError:
     _HAS_LUNAR = False
 
+
+# ── H1（v1.5.29）：activity 不许在开头自报时段 ────────────────────────────
+# 现象：渲染时是「时段 · 正文」，而生成器写 activity 时开头又报了时段，
+# 于是念出「晚间 · 晚间烟霾16°C，天黑了…」。
+# 治本：提示词里把这条写明。但**模板是用户自己的东西**（配置项 prompt_template
+# 可能被改过、也可能是旧版本留下来的），所以不能靠改模板文本去覆盖它 ——
+# 这里做一层兜底：模板里没有这条约束，就在「开始生成」之前补一段，
+# 有就一个字都不加。默认模板和配置模板都走这条路。
+_ACTIVITY_RULE_MARK = "开头别再报一遍时段"
+_ACTIVITY_RULE_BLOCK = (
+    "\n## 格式补充（这一格正文怎么写）\n"
+    "- 开头别再报一遍时段（「晚间 · 」「上午，」这种都算）——外面已经写着是哪个时段了。\n"
+    "- 天气可以写，但别把「时段＋天气」捆成一句引子；直接从这一格发生的事说起。\n"
+)
+
 class ContextBuilder:
 
     # ── 公历节日（仅非法定节假日） ──
@@ -54,6 +69,33 @@ class ContextBuilder:
         self.memory_bridge = memory_bridge
         # F8：法定节假日日历按年缓存（`holidays.China()` 每次都会重展开一整年）
         self._cn_cache: dict[int, Any] = {}
+        # H1：兜底补「别自报时段」这条只说明一次，别每次生成都刷一行日志
+        self._activity_rule_noted = False
+
+    def _ensure_activity_rule(self, prompt: str) -> str:
+        """模板里没有「activity 开头别报时段」这条时，替它补上（H1 · v1.5.29）。
+
+        为什么不直接改模板：`prompt_template` 是配置项，可能早就被主人改过、
+        也可能还是旧版本留下来的文本，插件没有权利覆盖它。所以做法是——
+        **有就不动，没有就在「开始生成」之前插一小段**；插的位置尽量靠前，
+        别落在「请按照以上约束输出 JSON」这句之后。
+
+        补过之后打一次日志（只一次），排查时能看出这句是插件加的、不是模板里的。
+        """
+        text = prompt or ""
+        if not text or _ACTIVITY_RULE_MARK in text:
+            return text
+        if "## 开始生成" in text:
+            text = text.replace("## 开始生成", _ACTIVITY_RULE_BLOCK.strip() + "\n\n## 开始生成", 1)
+        else:
+            text = text.rstrip() + "\n" + _ACTIVITY_RULE_BLOCK
+        if not self._activity_rule_noted:
+            self._activity_rule_noted = True
+            logger.info(
+                "[晨光心语] 📝 当前提示词模板里没有「activity 开头别报时段」这条，"
+                "已在生成时自动补一段（不改模板本身）"
+            )
+        return text
 
     def _get_today(self) -> date:
         """获取当前日期（使用配置的时区）"""
@@ -525,6 +567,8 @@ class ContextBuilder:
                 '  - `"schedule"`: 数组，每个元素包含 `"time"`、`"activity"`、`"location"`、`"beats"` 四个字段。\n'
                 '    · `"time"`：模糊时段（清晨/上午/午间/下午/傍晚/晚间），不要写具体时间点。\n'
                 '    · `"activity"`：中文散文，自由发挥，写这一格里发生了什么，自然融入角色性格与当日心境。\n'
+                '      开头别再报一遍时段（「晚间 · 」「上午，」这种都算）——外面已经写着是哪个时段了；\n'
+                '      天气可以写，但别把「时段＋天气」捆成一句引子，直接从这一格发生的事说起。\n'
                 '    · `"location"`：这一格她人在哪儿。优先从下面这张地点对照表里挑（英文小写）；\n'
                 '      表外的地点也可以写，只要那是她真的会去的地方：\n'
                 '        home / cafe / park / gym / library / street / workplace /\n'
@@ -591,6 +635,10 @@ class ContextBuilder:
         prompt = prompt_template
         for key, value in replacements.items():
             prompt = prompt.replace(key, str(value) if value else "")
+
+        # H1（v1.5.29）：把「别在正文开头自报时段和天气」这条兜上来。
+        # 见 _ensure_activity_rule 的说明——模板是用户自己的，不能被覆盖。
+        prompt = self._ensure_activity_rule(prompt)
 
         return {
             "prompt": prompt,
