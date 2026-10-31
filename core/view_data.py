@@ -71,26 +71,24 @@ def _schedule_path(plugin, persona_id: str, day):
         return None
 
 
-async def build_schedule_view(plugin, persona_id: str, now: datetime.datetime = None) -> dict:
-    """今日日程（页面「📅 今日日程」那块 + 重写成功后刷新用）。"""
-    today = plugin._get_today()
-    data = await plugin.storage.load_schedule(persona_id, today)
-    now = now or plugin._get_now()
-    cur = period_index_of(now.hour)
+def schedule_time_of(plugin) -> datetime.time:
+    """每日生成时间（配置里是 "08:00" 这种字符串）。"""
+    raw = str(plugin.get_config("schedule.schedule_time", "08:00") or "08:00")
+    raw = raw.strip().replace("：", ":")
+    try:
+        hh, mm = raw.split(":")[:2]
+        return datetime.time(int(hh), int(mm))
+    except Exception:
+        return datetime.time(8, 0)
 
-    if not data:
-        return {
-            "exists": False,
-            "today": today.isoformat(),
-            "current_index": cur,
-            "items": [],
-            "outfit": "",
-            "outfit_style": "",
-            "note": "",
-            "intent": "",
-            "generated_at": "",
-        }
 
+def before_generate_time(plugin, now: datetime.datetime) -> bool:
+    """现在是否还没到今天的生成时间（= 今天这份日程本来就还不该存在）。"""
+    st = schedule_time_of(plugin)
+    return (now.hour, now.minute) < (st.hour, st.minute)
+
+
+def _items_of(data: dict, cur: int) -> list[dict]:
     items = []
     for i, item in enumerate(data.get("schedule") or []):
         if not isinstance(item, dict):
@@ -101,36 +99,103 @@ async def build_schedule_view(plugin, persona_id: str, now: datetime.datetime = 
             {
                 "time": label,
                 "emoji": period_emoji(label),
-                "activity": strip_legacy_period_prefix(
-                    str(item.get("activity") or ""), label
-                ),
+                "activity": strip_legacy_period_prefix(str(item.get("activity") or ""), label),
                 "place": place_text(item, location_zh),
                 "is_now": idx == cur,
                 "is_past": idx < cur,
             }
         )
+    return items
 
-    generated_at = ""
-    path = _schedule_path(plugin, persona_id, today)
+
+def _mtime_of(plugin, persona_id: str, day) -> str:
     try:
+        path = _schedule_path(plugin, persona_id, day)
         if path is not None and path.exists():
-            generated_at = datetime.datetime.fromtimestamp(
-                path.stat().st_mtime
-            ).strftime("%H:%M")
+            return datetime.datetime.fromtimestamp(path.stat().st_mtime).strftime("%H:%M")
     except OSError:
-        generated_at = ""
+        pass
+    return ""
+
+
+async def build_schedule_view(plugin, persona_id: str, now: datetime.datetime = None,
+                        allow_fallback: bool = True) -> dict:
+    """今日日程（页面「📅 今日日程」那块 + 重写成功后刷新用）。
+
+    `allow_fallback`：今天这份还没生成、而**现在也还没到生成时间**（比如凌晨 3 点）时，
+    把**昨天那份**一并带回去（`fallback=True`），页面拿它灰着显示 ——
+    否则每天 0 点到 08:00 页面都只会干巴巴一句「今天还没有日程」，其实她还在昨晚的夜里。
+    """
+    today = plugin._get_today()
+    data = await plugin.storage.load_schedule(persona_id, today)
+    now = now or plugin._get_now()
+    cur = period_index_of(now.hour)
+    gen_at = schedule_time_of(plugin).strftime("%H:%M")
+
+    if not data:
+        view = {
+            "exists": False,
+            "today": today.isoformat(),
+            "current_index": cur,
+            "items": [],
+            "outfit": "",
+            "outfit_style": "",
+            "note": "",
+            "intent": "",
+            "generated_at": "",
+            "next_generate_at": gen_at,
+            "before_generate": before_generate_time(plugin, now),
+            "fallback": False,
+            "fallback_from": "",
+        }
+        if allow_fallback and view["before_generate"]:
+            yesterday = today - datetime.timedelta(days=1)
+            old = await plugin.storage.load_schedule(persona_id, yesterday)
+            if old:
+                view.update(
+                    {
+                        "items": _items_of(old, cur),
+                        "outfit": str(old.get("outfit") or ""),
+                        "outfit_style": str(old.get("outfit_style") or ""),
+                        "note": str(old.get("note") or ""),
+                        "intent": str(old.get("intent") or ""),
+                        "generated_at": _mtime_of(plugin, persona_id, yesterday),
+                        "fallback": True,
+                        "fallback_from": yesterday.isoformat(),
+                    }
+                )
+        return view
 
     return {
         "exists": True,
         "today": today.isoformat(),
         "current_index": cur,
-        "items": items,
+        "items": _items_of(data, cur),
         "outfit": str(data.get("outfit") or ""),
         "outfit_style": str(data.get("outfit_style") or ""),
         "note": str(data.get("note") or ""),
         "intent": str(data.get("intent") or ""),
-        "generated_at": generated_at,
+        "generated_at": _mtime_of(plugin, persona_id, today),
+        "next_generate_at": gen_at,
+        "before_generate": False,
+        "fallback": False,
+        "fallback_from": "",
     }
+
+
+def in_sleep_window(plugin, persona_id: str) -> bool:
+    """现在是否在她的睡眠窗口里（睡懒觉会顺延）。
+
+    跟「睡眠硬接管」（life_bridge.enforce_sleep_slot）用的是同一个判断 ——
+    所以不会出现「状态机钉成睡觉、页面说她还在放松」这种自相矛盾。
+    """
+    bridge = getattr(plugin, "life_bridge", None)
+    if bridge is None:
+        return False
+    try:
+        return bool(bridge.in_sleep_window_now(persona_id))
+    except Exception:
+        return False
 
 
 def _display_of(live) -> dict:
@@ -168,6 +233,7 @@ async def collect_status(plugin, persona_id: str) -> dict:
     life_on = bool(plugin.get_config("life_engine.enabled", False))
     out = {
         "persona_id": persona_id,
+        "sleeping": False,
         "enabled": bool(life_on and plugin.life_bridge is not None),
         "live": None,
         "live_display": {},
@@ -232,6 +298,7 @@ async def collect_status(plugin, persona_id: str) -> dict:
     except Exception:
         out["memory"] = None
 
+    out["sleeping"] = in_sleep_window(plugin, persona_id)
     return out
 
 

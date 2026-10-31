@@ -1335,23 +1335,27 @@ class MorningMusePlugin(Star):
             except Exception:
                 pass
 
+        # 内在状态切片（Phase 1）：让注入带上「此刻」，而不只是「今天」。
+        # 这段故意放在 if schedule 之外 —— 夜里（今天这份还没生成）也要有「此刻」，
+        # 否则从 0 点到生成时间之间，她既没有日程、也不知道自己在睡觉。
+        life_state = None
+        if self.life_bridge is not None and self.get_config("life_engine.enabled", False):
+            try:
+                life_state = await self.life_bridge.get_state(persona_id)
+            except Exception:
+                life_state = None
+            # 顺手把这轮对话喂给状态机——它不存原话，只累积「关系的厚度」。
+            # 放这儿而不是 if schedule 里面：日程还没生成的时段也要喂。
+            try:
+                msg = (event.message_str or "").strip()
+                if msg:
+                    self._keep_task(asyncio.create_task(
+                        self.life_bridge.on_user_message(persona_id, msg[:200])
+                    ))
+            except Exception:
+                pass
+
         if schedule:
-            # 内在状态切片（Phase 1）：让注入带上「此刻」，而不只是「今天」
-            life_state = None
-            if self.life_bridge is not None and self.get_config("life_engine.enabled", False):
-                try:
-                    life_state = await self.life_bridge.get_state(persona_id)
-                except Exception:
-                    life_state = None
-                # 顺手把这轮对话喂给状态机——它不存原话，只累积「关系的厚度」
-                try:
-                    msg = (event.message_str or "").strip()
-                    if msg:
-                        self._keep_task(asyncio.create_task(
-                            self.life_bridge.on_user_message(persona_id, msg[:200])
-                        ))
-                except Exception:
-                    pass
 
             # 主动分享钩子（R4）：她今天有没有想主动跟你说的事
             share_lines = []
@@ -1373,6 +1377,19 @@ class MorningMusePlugin(Star):
                 injection += ("\n（她今天有件想跟你说的事，合适的时候可以自然提起："
                               + "；".join(share_lines) + "）")
             self._append_dynamic_context(req, injection)
+        elif life_state:
+            # 今天这份日程还没生成（凌晨那段）：只送「此刻」，不带日程内容 ——
+            # 免得日程写着「在看书」、状态机说「睡着」两份上下文打架。
+            sleeping = False
+            try:
+                from .core.view_data import in_sleep_window
+
+                sleeping = in_sleep_window(self, persona_id)
+            except Exception:
+                sleeping = False
+            self._append_dynamic_context(
+                req, self._format_life_only(life_state, sleeping=sleeping)
+            )
 
     # 六个模糊时段 → 大致钟点（和天气、状态机用的是同一套）
     _PERIOD_ORDER = ["清晨", "上午", "午间", "下午", "傍晚", "晚间"]
@@ -1433,6 +1450,72 @@ class MorningMusePlugin(Star):
         return strip_legacy_period_prefix(
             str(item.get("activity") or ""), str(item.get("time") or "")
         )
+
+    @staticmethod
+    def _energy_phrase(value) -> str:
+        """把 0~1（或 0~100）的精力说成人话，别在上下文里甩 0.24 这种数字。"""
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return ""
+        if v <= 1.0:
+            v *= 100
+        if v < 15:
+            return "几乎没剩什么力气"
+        if v < 35:
+            return "只剩两成多"
+        if v < 55:
+            return "差不多对半"
+        if v < 75:
+            return "还算有劲"
+        return "精神挺足"
+
+    def _format_life_only(self, life_state: dict, sleeping: bool = False) -> str:
+        """只有「此刻」的一段上下文：今天这份日程还没生成时用（凌晨那段）。
+
+        写法贴着角色去说事 —— 不列字段、不下硬命令，只交代她在哪、什么状态、
+        被打断是什么感觉，剩下的交给她自己。
+        """
+        gen_at = "08:00"
+        try:
+            from .core.view_data import schedule_time_of
+
+            gen_at = schedule_time_of(self).strftime("%H:%M")
+        except Exception:
+            pass
+
+        activity = activity_zh((life_state or {}).get("current_activity", ""))
+        place = location_zh((life_state or {}).get("location", ""))
+        mood = mood_zh((life_state or {}).get("mood", ""))
+        energy = self._energy_phrase((life_state or {}).get("energy"))
+        # 睡着与否**以睡眠窗口为准**（跟状态机的「睡眠硬接管」同一套口径）：
+        # 活动名不可靠 —— 整点钉上的「睡觉」会被下一次 tick 重排成「放松/发呆」。
+        asleep = bool(sleeping) or (bool(activity) and "睡" in activity)
+
+        lines = ["[此刻]"]
+        lines.append(
+            f"今天那份日程还没出来（每天 {gen_at} 才有），今天要怎么过还没定 —— "
+            "这会儿不用急着给今天安排什么，先照自己现在的样子待着就好。"
+        )
+        if asleep:
+            where = "家里"
+            if place and place not in ("家", "家里"):
+                where = f"家里（{place}）" if "家" in place else f"家里的{place}"
+            lines.append(f"你正睡着：{where}，灯关着，屋里的声音慢慢的。")
+            if energy:
+                lines.append(f"这一觉睡到现在，{energy}。")
+            lines.append(
+                "要是这会儿被叫醒，你是从睡里被拽出来的 —— 眼皮发沉，声音里还带着没散开的困，"
+                "别一下子清醒得像白天；想赖一会儿、想含糊应一声，都可以。"
+            )
+        else:
+            headline = f"你现在：{activity}" + (f"（{place}）" if place else "") + "。"
+            if activity or place:
+                lines.append(headline)
+            bits = [b for b in (energy, f"心情{mood}" if mood else "") if b]
+            if bits:
+                lines.append("、".join(bits) + "。")
+        return "\n".join(lines)
 
     def _format_for_injection(self, schedule: dict, life_state: dict = None) -> str:
         """把日程整理成一段上下文，交给本轮对话（不写 system_prompt）。

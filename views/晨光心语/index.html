@@ -225,6 +225,7 @@
   .rows .r span:first-child{color:var(--dim)}
   .rows .r span:last-child{color:#e0d3c7;text-align:right;word-break:break-all}
   .ok-dot{color:var(--ok)}
+  .pending-dot{color:var(--dim)}
   .bad-dot{color:var(--err)}
 
   .empty{
@@ -232,6 +233,20 @@
     background:rgba(255,226,200,.028);border:1px dashed var(--line-hi);line-height:1.8;
   }
   .empty b{color:var(--text);font-weight:500}
+
+  /* ── 凌晨那段：今天的还没生成，先把昨晚那份灰着显示 ── */
+  .night-hint{
+    display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+    margin:0 0 12px;padding:9px 12px;border-radius:10px;
+    background:linear-gradient(90deg,rgba(120,140,200,.13),rgba(120,140,200,.04));
+    border:1px solid rgba(150,170,220,.18);
+  }
+  .night-hint .moon{font-size:15px;line-height:1}
+  .night-hint .t{color:var(--text);font-size:13.5px}
+  .night-hint .s{color:var(--dim);font-size:12px;margin-left:auto}
+  .timeline.dim{opacity:.62}
+  .timeline.dim .slot.now{opacity:1}
+  .timeline.dim .slot.now .txt{color:var(--text)}
   .skeleton{
     height:14px;border-radius:7px;margin:9px 0;
     background:linear-gradient(90deg,rgba(255,226,200,.05),rgba(255,226,200,.11),rgba(255,226,200,.05));
@@ -350,23 +365,10 @@
   }
 
   // ── 渲染：今日日程 ─────────────────────────────────────
-  function renderSchedule(sched, cfg) {
-    const box = $("schedule-card");
-    if (!sched || !sched.exists) {
-      const when = (cfg && cfg.schedule_time) || "08:00";
-      box.innerHTML =
-        '<div class="empty">今天还没有日程。<br>每天 <b>' + esc(when) + '</b> 会自己生成一份；' +
-        '想现在就要，点右上角「重写今天的日程」。</div>';
-      return;
-    }
-
-    let html = "";
-    if (sched.outfit) {
-      html += '<div class="ootd"><span class="k">OOTD</span><span class="v">' +
-        esc(sched.outfit) + "</span></div>";
-    }
-    html += '<ul class="timeline">';
-    (sched.items || []).forEach((it) => {
+  // 时间线（dim=true 用于"昨晚那份"的灰调）
+  function timelineHtml(items, dim) {
+    let html = '<ul class="timeline' + (dim ? " dim" : "") + '">';
+    (items || []).forEach((it) => {
       const cls = it.is_now ? "now" : (it.is_past ? "past" : "");
       html += '<li class="slot ' + cls + '">' +
         '<div class="t">' + esc(it.emoji) + " " + esc(it.time) + "</div>" +
@@ -377,6 +379,60 @@
         '</div><div class="txt">' + esc(it.activity) + "</div></div></li>";
     });
     html += "</ul>";
+    return html;
+  }
+
+  // 凌晨那段：今天的还没生成，显示昨晚那份 + 一句"她现在在睡"
+  function nightBlock(sched, when) {
+    const who = (state.data && state.data.persona) || "她";
+    const st = (state.data && state.data.status) || {};
+    const live = st.live_display || {};
+    const doing = String(live.activity || "").trim();
+    // 睡着与否以服务端给的睡眠窗口为准（活动名会被整点重排顶掉，不可靠）
+    const asleep = !!st.sleeping || doing.indexOf("睡") >= 0;
+    const headline = asleep ? (who + "正睡着") : (who + "：" + (doing || "这会儿没在做什么"));
+    let html = '<div class="night-hint">' +
+      '<span class="moon">🌙</span>' +
+      '<span class="t">' + esc(headline) + "</span>" +
+      '<span class="s">今天的日程 ' + esc(when) + " 生成 · 下面是昨晚那份</span></div>";
+    if (sched.outfit) {
+      html += '<div class="ootd"><span class="k">昨晚穿的</span><span class="v">' +
+        esc(sched.outfit) + "</span></div>";
+    }
+    html += timelineHtml(sched.items, true);
+    if (sched.note) {
+      html += '<div class="note"><span class="k">昨晚想跟你说</span>' + esc(sched.note) + "</div>";
+    }
+    return html;
+  }
+
+  function renderSchedule(sched, cfg) {
+    const box = $("schedule-card");
+    const when = (sched && sched.next_generate_at) || (cfg && cfg.schedule_time) || "08:00";
+
+    // 今天这份还没生成：
+    //   ① 还没到生成时间（凌晨那段）→ 把昨晚那份灰着显示，顶上一句「深夜 · 她正睡着」
+    //   ② 过了生成时间还是没有 → 照旧提示"还没有"，但不说"每天几点生成"以外的话
+    if (!sched || !sched.exists) {
+      if (sched && sched.fallback) {
+        box.innerHTML = nightBlock(sched, when);
+        return;
+      }
+      const tip = (sched && sched.before_generate)
+        ? '<div class="empty">今天的还没到生成时间（<b>' + esc(when) + '</b> 生成）。<br>' +
+          '想现在就要，点右上角「重写今天的日程」。</div>'
+        : '<div class="empty">今天还没有日程。<br>每天 <b>' + esc(when) + '</b> 会自己生成一份；' +
+          '想现在就要，点右上角「重写今天的日程」。</div>';
+      box.innerHTML = tip;
+      return;
+    }
+
+    let html = "";
+    if (sched.outfit) {
+      html += '<div class="ootd"><span class="k">OOTD</span><span class="v">' +
+        esc(sched.outfit) + "</span></div>";
+    }
+    html += timelineHtml(sched.items, false);
     if (sched.note) {
       html += '<div class="note"><span class="k">今天想跟你说</span>' + esc(sched.note) + "</div>";
     }
@@ -477,9 +533,12 @@
     const mine = state.persona;
     const generated = (cfg.generated || {})[mine];
     const at = (cfg.generated_at || {})[mine] || "";
+    const schedNow = (state.data && state.data.schedule) || {};
     const genText = generated === "error" ? '<span class="bad-dot">读取失败</span>'
       : generated ? '<span class="ok-dot">已生成' + (at ? " · " + esc(at) : "") + "</span>"
-      : '<span class="bad-dot">未生成</span>';
+      : schedNow.before_generate
+        ? '<span class="pending-dot">还没到点（' + esc(schedNow.next_generate_at || cfg.schedule_time || "08:00") + " 生成）</span>"
+        : '<span class="bad-dot">未生成</span>';
 
     let rows = "";
     const row = (k, v) => { rows += '<div class="r"><span>' + esc(k) + "</span><span>" + v + "</span></div>"; };
