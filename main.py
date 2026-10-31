@@ -1476,14 +1476,6 @@ class MorningMusePlugin(Star):
         写法贴着角色去说事 —— 不列字段、不下硬命令，只交代她在哪、什么状态、
         被打断是什么感觉，剩下的交给她自己。
         """
-        gen_at = "08:00"
-        try:
-            from .core.view_data import schedule_time_of
-
-            gen_at = schedule_time_of(self).strftime("%H:%M")
-        except Exception:
-            pass
-
         activity = activity_zh((life_state or {}).get("current_activity", ""))
         place = location_zh((life_state or {}).get("location", ""))
         mood = mood_zh((life_state or {}).get("mood", ""))
@@ -1492,11 +1484,9 @@ class MorningMusePlugin(Star):
         # 活动名不可靠 —— 整点钉上的「睡觉」会被下一次 tick 重排成「放松/发呆」。
         asleep = bool(sleeping) or (bool(activity) and "睡" in activity)
 
+        # 不再讲「今天那份还没生成」这种插件层面的事 —— 她这会儿就是照状态活着，
+        # 写明白反而出戏。只交代她在哪、什么状态、被打断是什么感觉。
         lines = ["[此刻]"]
-        lines.append(
-            f"今天那份日程还没出来（每天 {gen_at} 才有），今天要怎么过还没定 —— "
-            "这会儿不用急着给今天安排什么，先照自己现在的样子待着就好。"
-        )
         if asleep:
             where = "家里"
             if place and place not in ("家", "家里"):
