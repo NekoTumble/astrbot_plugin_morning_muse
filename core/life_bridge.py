@@ -641,37 +641,65 @@ class LifeBridgeManager:
         svc = await self._get_service(persona_id)
         if svc is None:
             return False
+        hours = self._sleep_hours_to_pin(persona_id)
+        if not hours:
+            return False
         try:
-            return await asyncio.to_thread(self._enforce_sleep_sync, svc)
+            return await asyncio.to_thread(self._enforce_sleep_sync, svc, hours)
         except Exception as e:
             logger.warning(f"[晨光心语] ⚠️ {persona_id} 睡眠接管失败: {e}")
             return False
 
-    @staticmethod
-    def _enforce_sleep_sync(svc) -> bool:
-        """★ 私有 API 封装点之四：把「当前这一格」写成 sleeping @ home。
+    def _sleep_hours_to_pin(self, persona_id: str) -> list[int]:
+        """这一个睡眠窗口里，**所有**落进去的整点（不只是当前那一格）。
 
-        `set_planned_activity` 会**跳过已经过去的小时**，所以这里取当前小时
-        （心跳相位通常在 :38，当格还没过），刚好落在它的允许范围内。
-        只动这一格 —— 不碰别的时段、不碰别的引擎。
+        为什么整窗都要钉：aura 自己排的 24 小时计划里，夜里那几格会被填成
+        「relaxing / thinking about user（还带 workplace、cafe 这种地点）」。
+        只钉当前一格的话，下一次 tick 就会把后面几格按那张计划重排回来 ——
+        activity_logs 里于是留下「凌晨一点在泡澡」这种记录，白天她一张嘴就是
+        「我凌晨去了咖啡店」。
+        """
+        now = self._local_now()
+        hours: list[int] = []
+        for hour in range(24):
+            try:
+                if self._hour_in_sleep_window(persona_id, hour, now):
+                    hours.append(hour)
+            except Exception:
+                continue
+        return hours
+
+    @staticmethod
+    def _enforce_sleep_sync(svc, hours=None) -> bool:
+        """★ 私有 API 封装点之四：把睡眠窗口里那几格都写成 sleeping @ home。
+
+        `set_planned_activity` 会**跳过已经过去的小时**，所以把整窗传进来是安全的 ——
+        过去的格子它自己会忽略，未来的格子才真的被改写。
+        只动计划格 + 当前地点，不碰别的引擎。
         """
         planner = getattr(svc, "_daily_planner", None)
         world = getattr(svc, "_world", None)
         if planner is None:
             return False
-        hour = datetime.now().hour
-        try:
-            planner.set_planned_activity(
-                hour, "sleeping", location="home", reason="night sleep",
-            )
-        except Exception as e:
-            logger.debug(f"[晨光心语] 睡眠接管: set_planned_activity 失败: {e}")
+        now_hour = datetime.now().hour
+        targets = list(hours) if hours else [now_hour]
+        pinned = 0
+        for hour in targets:
+            try:
+                planner.set_planned_activity(
+                    hour, "sleeping", location="home", reason="night sleep",
+                )
+                pinned += 1
+            except Exception as e:
+                logger.debug(f"[晨光心语] 睡眠接管: {hour} 点写入失败: {e}")
+        if pinned == 0:
             return False
         if world is not None:
             try:
                 world.move_to("home")
             except Exception:
                 pass
+        logger.info(f"[晨光心语] 😴 睡眠接管：钉了 {pinned} 格（{targets[0]}~{targets[-1]} 点）")
         return True
 
     # ---------- 睡醒补算（AI 人格专属） ----------

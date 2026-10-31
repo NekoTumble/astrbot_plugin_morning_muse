@@ -1499,12 +1499,16 @@ class MorningMusePlugin(Star):
                 "别一下子清醒得像白天；想赖一会儿、想含糊应一声，都可以。"
             )
         else:
-            headline = f"你现在：{activity}" + (f"（{place}）" if place else "") + "。"
-            if activity or place:
-                lines.append(headline)
+            where = place or ""
+            if activity and where:
+                lines.append(f"你在{where}，正在{activity}。")
+            elif activity:
+                lines.append(f"你正在{activity}。")
+            elif where:
+                lines.append(f"你在{where}，没在做什么特别的事。")
             bits = [b for b in (energy, f"心情{mood}" if mood else "") if b]
             if bits:
-                lines.append("、".join(bits) + "。")
+                lines.append("这会儿" + "，".join(bits) + "。")
         return "\n".join(lines)
 
     def _format_for_injection(self, schedule: dict, life_state: dict = None) -> str:
