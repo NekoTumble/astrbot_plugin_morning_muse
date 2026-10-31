@@ -17,6 +17,7 @@ from astrbot.core.agent.message import TextPart
 
 from .commands.debug import DebugCommands
 from .commands.schedule import PersonaCommands, ScheduleCommands
+from .core.config_defaults import schema_default
 from .core.context_builder import ContextBuilder
 from .core.event_ledger import EventLedger
 from .core.generator import ScheduleGenerator
@@ -699,18 +700,27 @@ class MorningMusePlugin(Star):
 
     # ---------- 配置访问（支持嵌套键）----------
     def get_config(self, key: str, default=None):
-        """支持点号分隔的嵌套键，例如 'persona_styles.persona_name_1'"""
+        """支持点号分隔的嵌套键，例如 'persona_styles.persona_name_1'
+
+        v1.5.29：配置里**没有**这个键时，先去 `_conf_schema.json` 查登记的默认值，
+        查不到才用调用方传进来的兜底（实现在 `core/config_defaults.py`）。
+
+        为什么改：同一个默认值以前写两遍（schema 一处、每处 get_config 一处），
+        已经漂了 12 处 —— 比如 `schedule_validation.enabled`，设置页默认 true、
+        代码兜底 false，键一旦缺失，日程验收会静默关闭而设置页还显示「开启」。
+        现在「设置页写什么」就是「缺键时用什么」，只有一份。
+        """
         if "." in key:
             node = self._config
             for k in key.split("."):
                 if isinstance(node, dict) and k in node:
                     node = node[k]
                 else:
-                    return default
+                    return schema_default(key, default)
             return node
         if key in self._config:
             return self._config[key]
-        return default
+        return schema_default(key, default)
 
     async def set_config(self, key: str, value):
         """支持点号分隔的嵌套键，例如 'schedule.schedule_time'。
