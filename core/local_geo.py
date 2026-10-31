@@ -63,9 +63,9 @@ def _season_of(month: int) -> str:
     return _MONTH_SEASON.get(int(month), "")
 
 
-def _manual_places(plugin) -> list[str]:
-    """手填的「常去的地方」。一行一个，也认中英文逗号/顿号分隔。"""
-    raw = str(plugin.get_config("local_geo_places", "") or "").strip()
+def _manual_places(plugin, key: str = "local_geo_places") -> list[str]:
+    """手填的清单。一行一个，也认中英文逗号/顿号分隔。"""
+    raw = str(plugin.get_config(key, "") or "").strip()
     if not raw:
         return []
     parts = re.split(r"[,，、;；\n]+", raw)
@@ -106,14 +106,15 @@ def build_text(plugin, pois: list[dict] | None = None) -> str:
         f"- {MARK}{area}。现在是 {today.month} 月，{season}。那一带的气候按常理推断就好，别编出反季节的天气。",
     ]
 
-    # 具体能去的地方分两组：
-    #   生活圈（手填清单 + 3 公里内的店/公园）→ 平时随便去
-    #   同城景点（15 公里内）→ 要专门跑一趟，偶尔
-    manual = _manual_places(plugin)
+    # 具体能去的地方分两组（手填 + 地图查询各归各的组）：
+    #   生活圈 → 平时常去；同城景点 → 要费点工夫跑一趟
+    # 注意：这里只给「参考与建议」，不设频率/距离的硬限制 —— 她天天去也行。
+    manual = _manual_places(plugin, "local_geo_places")
+    manual_scenic = _manual_places(plugin, "local_geo_scenic_places")
     nearby = [p for p in (pois or []) if isinstance(p, dict) and p.get("group") != "scenic"]
     scenic = [p for p in (pois or []) if isinstance(p, dict) and p.get("group") == "scenic"]
 
-    lines.append("- 这一带真实存在、她**平时**会去的地方（可以写它们的名字，但不要加门牌号/详细地址）：")
+    lines.append("- 这一带真实存在、她**平时常去**的地方（可以写它们的名字，但不要加门牌号/详细地址）：")
     shown: set[str] = set()
     for name in manual:
         lines.append(f"  · {name}")
@@ -130,18 +131,26 @@ def build_text(plugin, pois: list[dict] | None = None) -> str:
             "  · （没有具体清单）你知道这座城市的真实地标就写；拿不准的别硬编，说成「城东那家开了很多年的旧书店」这种也像真的。"
         )
 
-    if scenic:
-        lines.append("- 同城还有这些**值得专门跑一趟**的地方（偶尔去，别当成每天都干的事）：")
-        for p in scenic:
-            name = str(p.get("name") or "").strip()
-            if name and name not in shown:
-                shown.add(name)
-                lines.append(f"  · {name}")
+    scenic_shown: set[str] = set()
+    scenic_lines: list[str] = []
+    for name in manual_scenic:
+        if name not in shown:
+            scenic_shown.add(name)
+            scenic_lines.append(f"  · {name}")
+    for p in scenic:
+        name = str(p.get("name") or "").strip()
+        if name and name not in shown and name not in scenic_shown:
+            scenic_shown.add(name)
+            scenic_lines.append(f"  · {name}")
+    if scenic_lines:
+        lines.append("- 同城还可以去这些地方（跑一趟要费点工夫，去一趟是件事）：")
+        lines.extend(scenic_lines)
 
+    # 距离与节奏：**只给建议**，不设硬限制。想天天去也行，只要写出来可信。
     lines.append(
-        "- 距离与节奏：日常活动都在同城，多数在步行到几站路的范围；上面「专门跑一趟」那些是**偶尔**的"
-        "（一个月顶多一两次，得有个由头：放假、惦记已久、正好顺路）。"
-        "**出城去别的城市**只能写成专门计划，绝不能当成今天随手就去的事。"
+        "- 远近和频率都随她：近的地方可以天天去，远的偶尔专门跑一趟，真惦记着想连着去几天也没什么不可以。"
+        "唯一要顾的是「读起来可信」——去得远、去得勤，就在正文里交代一句为什么（想去的念头、正好顺路、约了人）。"
+        "出城（去别的城市）写成计划好的一趟，别让人以为她天天在外面跑。"
     )
 
     if hint:
