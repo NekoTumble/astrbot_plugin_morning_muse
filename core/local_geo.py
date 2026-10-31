@@ -106,24 +106,43 @@ def build_text(plugin, pois: list[dict] | None = None) -> str:
         f"- {MARK}{area}。现在是 {today.month} 月，{season}。那一带的气候按常理推断就好，别编出反季节的天气。",
     ]
 
-    # 具体能去的地方：手填清单优先，其次是高德查到的
-    places = _manual_places(plugin)
-    auto = [p for p in (pois or []) if isinstance(p, dict) and str(p.get("name") or "").strip()]
-    lines.append("- 这一带真实存在、她可能会去的地方（**可以写它们的名字**，但不要加门牌号/详细地址）：")
-    if places:
-        for name in places:
-            lines.append(f"  · {name}")
-    for p in auto:
+    # 具体能去的地方分两组：
+    #   生活圈（手填清单 + 3 公里内的店/公园）→ 平时随便去
+    #   同城景点（15 公里内）→ 要专门跑一趟，偶尔
+    manual = _manual_places(plugin)
+    nearby = [p for p in (pois or []) if isinstance(p, dict) and p.get("group") != "scenic"]
+    scenic = [p for p in (pois or []) if isinstance(p, dict) and p.get("group") == "scenic"]
+
+    lines.append("- 这一带真实存在、她**平时**会去的地方（可以写它们的名字，但不要加门牌号/详细地址）：")
+    shown: set[str] = set()
+    for name in manual:
+        lines.append(f"  · {name}")
+        shown.add(name)
+    for p in nearby:
         name = str(p.get("name") or "").strip()
-        bucket = str(p.get("bucket") or "").strip()
-        suffix = f"（{bucket}）" if bucket else ""
-        if places and name in places:
+        if not name or name in shown:
             continue
-        lines.append(f"  · {name}{suffix}")
-    if not places and not auto:
+        shown.add(name)
+        bucket = str(p.get("bucket") or "").strip()
+        lines.append(f"  · {name}" + (f"（{bucket}）" if bucket else ""))
+    if not shown:
         lines.append(
             "  · （没有具体清单）你知道这座城市的真实地标就写；拿不准的别硬编，说成「城东那家开了很多年的旧书店」这种也像真的。"
         )
+
+    if scenic:
+        lines.append("- 同城还有这些**值得专门跑一趟**的地方（偶尔去，别当成每天都干的事）：")
+        for p in scenic:
+            name = str(p.get("name") or "").strip()
+            if name and name not in shown:
+                shown.add(name)
+                lines.append(f"  · {name}")
+
+    lines.append(
+        "- 距离与节奏：日常活动都在同城，多数在步行到几站路的范围；上面「专门跑一趟」那些是**偶尔**的"
+        "（一个月顶多一两次，得有个由头：放假、惦记已久、正好顺路）。"
+        "**出城去别的城市**只能写成专门计划，绝不能当成今天随手就去的事。"
+    )
 
     if hint:
         lines.append(f"- 她跟这片地方的关系：{hint}")

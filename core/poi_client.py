@@ -6,11 +6,16 @@
     amap  高德 Web 服务 —— 国内店名最全，需要你自己申请 Key（有免费额度）
     osm   OpenStreetMap —— 免费、不用 Key，大城市的公园/地标还行，小店铺偏少
 
-三条纪律（跟上一版一样，只是多了一个数据源）：
+每次查询分**两组**（v1.5.29 第二版补的，解决「同城景点进不来」）：
+
+    nearby  生活圈：半径 3 公里，咖啡/书店/餐馆/公园这类她平时会去的地方
+    scenic  同城景点：半径 15 公里，风景名胜/博物馆/公园这类「值得专门跑一趟」的
+
+三条纪律：
 
 1. **只有「本地环境参考」总开关开着、且地图源不是 off 时才发请求**；关着一行都不走。
 2. **一天最多查一次，结果落盘缓存**（生成与重写共用；换地址/换源才重查）。
-3. **不落盘坐标**：缓存只存「名字 + 粗粒度距离桶（步行可达 / 要出门一趟）」。
+3. **不落盘坐标**：缓存只存「名字 + 分组 + 距离桶」。
 
 失败一律安静退化（没网 / 配额用尽 / 地址解析不出 → 当作没有 POI），
 退回「模型常识 + 手填清单」，不影响日程生成。
@@ -29,8 +34,10 @@ from .weather_client import _get_client  # 复用天气那条 httpx 连接，由
 # ── 高德 ────────────────────────────────────────────────
 AMAP_GEO = "https://restapi.amap.com/v3/geocode/geo"
 AMAP_AROUND = "https://restapi.amap.com/v3/place/around"
-# 餐饮服务 / 购物服务 / 风景名胜 / 文化场馆 / 体育休闲
-AMAP_TYPES = "050000|060000|110000|140000|080000"
+# 生活类：餐饮服务 / 购物服务 / 文化场馆 / 体育休闲
+AMAP_TYPES_NEARBY = "050000|060000|140000|080000"
+# 景点类：风景名胜
+AMAP_TYPES_SCENIC = "110000"
 
 # ── OpenStreetMap ──────────────────────────────────────
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
@@ -38,22 +45,32 @@ OVERPASS = "https://overpass-api.de/api/interpreter"
 # Nominatim 的使用政策要求带一个能辨认来源的 UA
 USER_AGENT = "AstrBot-MorningMuse/1.5.29 (AstrBot plugin: local geo reference)"
 
-RADIUS_M = 3000          # 周边 3 公里
-MAX_POIS = 8             # 最多带几个地方给她
-WALK_M = 1500            # ≤1.5 公里算「步行可达」
+NEARBY_RADIUS_M = 3000    # 生活圈 3 公里
+SCENIC_RADIUS_M = 15000   # 同城景点 15 公里
+MAX_NEARBY = 8
+MAX_SCENIC = 5
+WALK_M = 1500             # ≤1.5 公里算「步行可达」
 TIMEOUT = 12.0
 
 # 名字里带这些词的不要（不是「可去的地方」，是行政/住宅/公司一类）
 _SKIP_WORDS = ("小区", "社区", "村委会", "居委会", "有限公司", "售后", "维修", "充电站")
 
-_OSM_QUERY = """[out:json][timeout:25];
+# OSM 两组查询（{r}/{lat}/{lon} 由代码填）
+_OSM_NEARBY = """[out:json][timeout:25];
 (
  nwr["name"]["amenity"~"^(cafe|restaurant|fast_food|food_court|library|cinema|theatre|marketplace)$"](around:{r},{lat},{lon});
  nwr["name"]["leisure"~"^(park|garden|playground|fitness_centre|sports_centre)$"](around:{r},{lat},{lon});
  nwr["name"]["shop"~"^(books|supermarket|convenience|bakery|coffee|tea|florist)$"](around:{r},{lat},{lon});
- nwr["name"]["tourism"~"^(museum|attraction|gallery|viewpoint)$"](around:{r},{lat},{lon});
 );
 out center 80;"""
+
+_OSM_SCENIC = """[out:json][timeout:25];
+(
+ nwr["name"]["tourism"~"^(attraction|museum|gallery|viewpoint|zoo|theme_park)$"](around:{r},{lat},{lon});
+ nwr["name"]["leisure"~"^(park|nature_reserve)$"](around:{r},{lat},{lon});
+ nwr["name"]["amenity"~"^(place_of_worship)$"](around:{r},{lat},{lon});
+);
+out center 60;"""
 
 
 def resolve_area(plugin) -> str:
@@ -73,7 +90,7 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(math.sqrt(a))
 
 
-def _bucket(distance_m: float) -> str:
+def _nearby_bucket(distance_m: float) -> str:
     return "步行可达" if 0 < distance_m <= WALK_M else "要出门一趟"
 
 
@@ -89,7 +106,10 @@ class PoiClient:
 
     # ── 对外 ────────────────────────────────────────────────
     async def day_pois(self) -> list[dict]:
-        """返回 [{"name": ..., "bucket": ...}]；没开/没源/查不到都是空列表。"""
+        """返回 [{"name", "bucket", "group"}]；group ∈ {nearby, scenic}。
+
+        没开 / 没选数据源 / 查不到 都是空列表。
+        """
         if not self.plugin.get_config("enable_local_geo", False):
             return []
         backend = str(self.plugin.get_config("local_geo_map", "off") or "off").strip().lower()
@@ -110,6 +130,7 @@ class PoiClient:
             and cached.get("date") == today
             and cached.get("area") == area
             and cached.get("backend") == backend
+            and cached.get("v") == 2
         ):
             return list(cached.get("items") or [])
 
@@ -125,7 +146,7 @@ class PoiClient:
 
         # 查不到也缓存「今天这个地址没有结果」，免得每次生成都去打接口（配额很贵）
         self._save_cache(
-            {"date": today, "area": area, "backend": backend, "items": items,
+            {"v": 2, "date": today, "area": area, "backend": backend, "items": items,
              "ts": int(time.time())}
         )
         return items
@@ -169,7 +190,21 @@ class PoiClient:
         if not lng:
             logger.info("[晨光心语] 📍 本地地点参考：地址解析不出来，本次不查周边（不影响日程）")
             return []
-        return await self._amap_around(client, key, lng, lat)
+        nearby = await self._amap_around(
+            client, key, lng, lat,
+            radius=NEARBY_RADIUS_M, types=AMAP_TYPES_NEARBY,
+            limit=MAX_NEARBY, group="nearby",
+        )
+        scenic = await self._amap_around(
+            client, key, lng, lat,
+            radius=SCENIC_RADIUS_M, types=AMAP_TYPES_SCENIC,
+            limit=MAX_SCENIC, group="scenic",
+        )
+        if nearby or scenic:
+            logger.info(
+                f"[晨光心语] 📍 高德：生活圈 {len(nearby)} 个、同城景点 {len(scenic)} 个（今天不再重复查）"
+            )
+        return nearby + scenic
 
     async def _amap_geocode(self, client, key: str, area: str):
         resp = await client.get(
@@ -186,14 +221,15 @@ class PoiClient:
         lng, lat = loc.split(",", 1)
         return lng.strip(), lat.strip()
 
-    async def _amap_around(self, client, key: str, lng: str, lat: str) -> list[dict]:
+    async def _amap_around(self, client, key: str, lng: str, lat: str, *,
+                           radius: int, types: str, limit: int, group: str) -> list[dict]:
         resp = await client.get(
             AMAP_AROUND,
             params={
                 "key": key,
                 "location": f"{lng},{lat}",
-                "radius": RADIUS_M,
-                "types": AMAP_TYPES,
+                "radius": radius,
+                "types": types,
                 "sortrule": "distance",
                 "offset": 25,
                 "page": 1,
@@ -220,11 +256,12 @@ class PoiClient:
             except (TypeError, ValueError):
                 dist = 0
             seen.add(name)
-            items.append({"name": name, "bucket": _bucket(dist)})
-            if len(items) >= MAX_POIS:
+            if group == "scenic":
+                items.append({"name": name, "bucket": "要专门跑一趟", "group": "scenic"})
+            else:
+                items.append({"name": name, "bucket": _nearby_bucket(dist), "group": "nearby"})
+            if len(items) >= limit:
                 break
-        if items:
-            logger.info(f"[晨光心语] 📍 高德：查到 {len(items)} 个周边地点（今天不再重复查）")
         return items
 
     # ── OpenStreetMap ───────────────────────────────────────
@@ -234,7 +271,19 @@ class PoiClient:
         if lat is None:
             logger.info("[晨光心语] 📍 本地地点参考：OSM 解析不出这个地址，本次不查周边（不影响日程）")
             return []
-        return await self._osm_around(client, lat, lon)
+        nearby = await self._osm_around(
+            client, lat, lon, radius=NEARBY_RADIUS_M, template=_OSM_NEARBY,
+            limit=MAX_NEARBY, group="nearby",
+        )
+        scenic = await self._osm_around(
+            client, lat, lon, radius=SCENIC_RADIUS_M, template=_OSM_SCENIC,
+            limit=MAX_SCENIC, group="scenic",
+        )
+        if nearby or scenic:
+            logger.info(
+                f"[晨光心语] 📍 OSM：生活圈 {len(nearby)} 个、同城景点 {len(scenic)} 个（今天不再重复查）"
+            )
+        return nearby + scenic
 
     async def _osm_geocode(self, client, area: str):
         resp = await client.get(
@@ -251,8 +300,9 @@ class PoiClient:
         except (KeyError, TypeError, ValueError):
             return None, None
 
-    async def _osm_around(self, client, lat: float, lon: float) -> list[dict]:
-        query = _OSM_QUERY.format(r=RADIUS_M, lat=lat, lon=lon)
+    async def _osm_around(self, client, lat: float, lon: float, *,
+                          radius: int, template: str, limit: int, group: str) -> list[dict]:
+        query = template.format(r=radius, lat=lat, lon=lon)
         resp = await client.post(
             OVERPASS,
             data={"data": query},
@@ -284,9 +334,8 @@ class PoiClient:
             if name in seen:
                 continue
             seen.add(name)
-            items.append({"name": name, "bucket": _bucket(dist)})
-            if len(items) >= MAX_POIS:
+            bucket = "要专门跑一趟" if group == "scenic" else _nearby_bucket(dist)
+            items.append({"name": name, "bucket": bucket, "group": group})
+            if len(items) >= limit:
                 break
-        if items:
-            logger.info(f"[晨光心语] 📍 OSM：查到 {len(items)} 个周边地点（今天不再重复查）")
         return items
