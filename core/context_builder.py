@@ -6,6 +6,7 @@ from typing import Any
 from astrbot.api import logger
 
 from .state_store import StateStore
+from .local_geo import build_text as build_local_geo_text, ensure_block as ensure_local_geo_block
 from .storage import ScheduleStorage
 from .timezone_utils import get_today
 
@@ -71,6 +72,8 @@ class ContextBuilder:
         self._cn_cache: dict[int, Any] = {}
         # H1：兜底补「别自报时段」这条只说明一次，别每次生成都刷一行日志
         self._activity_rule_noted = False
+        # J1：本地环境参考补进模板的说明也只打一次
+        self._local_geo_noted = False
 
     def _ensure_activity_rule(self, prompt: str) -> str:
         """模板里没有「activity 开头别报时段」这条时，替它补上（H1 · v1.5.29）。
@@ -485,6 +488,9 @@ class ContextBuilder:
 
         persona_prompt = await self._get_persona_prompt(persona_id)
 
+        # J1 · 本地现实地址参考（默认关）：关着时这里是空串，后面一个字都不会动
+        local_geo_text = build_local_geo_text(self.plugin)
+
         prompt_template = self.plugin.get_config("prompt_template", "")
         if not prompt_template:
             prompt_template = (
@@ -493,6 +499,7 @@ class ContextBuilder:
                 "## Context\n"
                 "- 日期：{date_str} {weekday} {holiday}\n"
                 "- 今日天气：{weather_info}  ← 若此处为空，请完全忽略天气因素，默认适宜日常活动\n"
+                "{local_geo}"
                 "- 人设标签：{persona_desc}  ← 若为空，则仅以人格提示词为准\n"
                 "- 人格参考：{persona_prompt}\n\n"
                 "## 🎲 今日创意调料（灵感参考，不必照搬）\n"
@@ -630,11 +637,23 @@ class ContextBuilder:
             "{yesterday_state}": yesterday_state_text,
             "{open_threads}": open_threads_text,
             "{life_state}": life_state_text,
+            "{local_geo}": local_geo_text,
         }
 
         prompt = prompt_template
         for key, value in replacements.items():
             prompt = prompt.replace(key, str(value) if value else "")
+
+        # J1：模板里没有 {local_geo} 这个占位符时，把画像补进去（补在「开始生成」之前）。
+        # 没开这个开关时 local_geo_text 是空串，下面整段都不执行 —— 生成结果与开功能前一致。
+        if local_geo_text and "{local_geo}" not in prompt_template:
+            prompt = ensure_local_geo_block(prompt, local_geo_text)
+            if not self._local_geo_noted:
+                self._local_geo_noted = True
+                logger.info(
+                    "[晨光心语] 📍 当前提示词模板里没有 {local_geo}，"
+                    "本地环境参考已补在「开始生成」之前（不改模板本身）"
+                )
 
         # H1（v1.5.29）：把「别在正文开头自报时段和天气」这条兜上来。
         # 见 _ensure_activity_rule 的说明——模板是用户自己的，不能被覆盖。

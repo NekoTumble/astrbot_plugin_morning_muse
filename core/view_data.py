@@ -36,6 +36,8 @@ _SWITCHES = (
     ("schedule_validation.enabled", "日程验收", True),
     ("event_ledger.enabled", "生活账本", False),
     ("weather.weather_enabled", "天气参考", False),
+    # J1：只显示开关状态，页面上不提供编辑（避免多一个写入面）
+    ("enable_local_geo", "本地环境参考", False),
 )
 
 
