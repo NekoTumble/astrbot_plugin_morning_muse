@@ -490,7 +490,7 @@ class ContextBuilder:
 
         # J1 · 本地现实地址参考（默认关）：关着时这里是空串，后面一个字都不会动
         local_geo_text = ""
-        if self.plugin.get_config("enable_local_geo", False):
+        if self.plugin.get_config("local_geo.enabled", False):
             pois = []
             poi_client = getattr(self.plugin, "poi_client", None)
             if poi_client is not None:

@@ -63,7 +63,7 @@ def _season_of(month: int) -> str:
     return _MONTH_SEASON.get(int(month), "")
 
 
-def _manual_places(plugin, key: str = "local_geo_places") -> list[str]:
+def _manual_places(plugin, key: str = "local_geo.places") -> list[str]:
     """手填的清单。一行一个，也认中英文逗号/顿号分隔。"""
     raw = str(plugin.get_config(key, "") or "").strip()
     if not raw:
@@ -80,12 +80,12 @@ def _manual_places(plugin, key: str = "local_geo_places") -> list[str]:
 def build_text(plugin, pois: list[dict] | None = None) -> str:
     """渲染那段「环境画像」。总开关关着 → 返回空串（调用方什么都别做）。"""
     try:
-        if not plugin.get_config("enable_local_geo", False):
+        if not plugin.get_config("local_geo.enabled", False):
             return ""
     except Exception:
         return ""
 
-    area = str(plugin.get_config("local_geo_area", "") or "").strip()
+    area = str(plugin.get_config("local_geo.area", "") or "").strip()
     if not area:
         # 留空 → 回退天气配置里的城市名
         area = str(plugin.get_config("weather.weather_location", "") or "").strip()
@@ -93,7 +93,7 @@ def build_text(plugin, pois: list[dict] | None = None) -> str:
         logger.info("[晨光心语] 📍 本地环境参考开着，但没有地址（local_geo_area 与天气城市都空），本次不注入")
         return ""
 
-    hint = str(plugin.get_config("local_geo_hint", "") or "").strip()
+    hint = str(plugin.get_config("local_geo.hint", "") or "").strip()
 
     try:
         today = plugin._get_today()
@@ -109,8 +109,8 @@ def build_text(plugin, pois: list[dict] | None = None) -> str:
     # 具体能去的地方分两组（手填 + 地图查询各归各的组）：
     #   生活圈 → 平时常去；同城景点 → 要费点工夫跑一趟
     # 注意：这里只给「参考与建议」，不设频率/距离的硬限制 —— 她天天去也行。
-    manual = _manual_places(plugin, "local_geo_places")
-    manual_scenic = _manual_places(plugin, "local_geo_scenic_places")
+    manual = _manual_places(plugin, "local_geo.places")
+    manual_scenic = _manual_places(plugin, "local_geo.scenic_places")
     nearby = [p for p in (pois or []) if isinstance(p, dict) and p.get("group") != "scenic"]
     scenic = [p for p in (pois or []) if isinstance(p, dict) and p.get("group") == "scenic"]
 
@@ -190,9 +190,9 @@ def scrub_schedule(plugin, data: dict) -> int:
     if not isinstance(data, dict):
         return 0
     try:
-        if not plugin.get_config("enable_local_geo", False):
+        if not plugin.get_config("local_geo.enabled", False):
             return 0
-        if not plugin.get_config("local_geo_scrub", True):
+        if not plugin.get_config("local_geo.scrub", True):
             return 0
     except Exception:
         return 0

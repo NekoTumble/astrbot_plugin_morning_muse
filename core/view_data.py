@@ -37,7 +37,7 @@ _SWITCHES = (
     ("event_ledger.enabled", "生活账本", False),
     ("weather.weather_enabled", "天气参考", False),
     # J1：只显示开关状态，页面上不提供编辑（避免多一个写入面）
-    ("enable_local_geo", "本地环境参考", False),
+    ("local_geo.enabled", "本地环境参考", False),
 )
 
 
@@ -266,10 +266,10 @@ def collect_switches(plugin) -> list[dict]:
             row["extra"] = city
 
     # 本地环境参考：开着的话把「附近的地方从哪查」也标出来（只显示，不在这里改）
-    backend = str(plugin.get_config("local_geo_map", "off") or "off").strip().lower()
+    backend = str(plugin.get_config("local_geo.map", "off") or "off").strip().lower()
     label = {"amap": "高德", "osm": "OSM"}.get(backend, "")
     for row in switches:
-        if row["key"] == "enable_local_geo" and row["on"] and label:
+        if row["key"] == "local_geo.enabled" and row["on"] and label:
             row["extra"] = label
     return switches
 

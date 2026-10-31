@@ -75,7 +75,7 @@ out center 60;"""
 
 def resolve_area(plugin) -> str:
     """查询中心用哪个地址：优先 `local_geo_area`，空则回退天气配置里的城市。"""
-    area = str(plugin.get_config("local_geo_area", "") or "").strip()
+    area = str(plugin.get_config("local_geo.area", "") or "").strip()
     if not area:
         area = str(plugin.get_config("weather.weather_location", "") or "").strip()
     return area
@@ -110,16 +110,16 @@ class PoiClient:
 
         没开 / 没选数据源 / 查不到 都是空列表。
         """
-        if not self.plugin.get_config("enable_local_geo", False):
+        if not self.plugin.get_config("local_geo.enabled", False):
             return []
-        backend = str(self.plugin.get_config("local_geo_map", "off") or "off").strip().lower()
+        backend = str(self.plugin.get_config("local_geo.map", "off") or "off").strip().lower()
         if backend not in ("amap", "osm"):
             return []
         area = resolve_area(self.plugin)
         if not area:
             return []
         if backend == "amap" and not str(
-            self.plugin.get_config("local_geo_amap_key", "") or ""
+            self.plugin.get_config("local_geo.amap_key", "") or ""
         ).strip():
             return []          # 选了高德却没填 Key = 当没选（不报错、不打扰）
 
@@ -184,7 +184,7 @@ class PoiClient:
 
     # ── 高德 ────────────────────────────────────────────────
     async def _query_amap(self, area: str) -> list[dict]:
-        key = str(self.plugin.get_config("local_geo_amap_key", "") or "").strip()
+        key = str(self.plugin.get_config("local_geo.amap_key", "") or "").strip()
         client = _get_client()
         lng, lat = await self._amap_geocode(client, key, area)
         if not lng:
