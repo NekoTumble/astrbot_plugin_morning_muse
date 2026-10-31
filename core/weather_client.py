@@ -343,6 +343,8 @@ _ALARM_TITLE_RE = re.compile(
 
 # 设置页留空时回退到这几个 —— 刻意**不是**「全国都认」：
 # 宁可安静，也不要半夜为另一个省的霾开口。
+# 预警地区**故意不给默认值**：留空就一个都不认，等你在设置页填自己所在的城市。
+# （以前这里写死过某个城市及下辖，等于把作者所在城市带进了公开代码，已去掉。）
 DEFAULT_ALARM_AREAS = ()
 DEFAULT_ALARM_TYPES = ("霾", "雾", "高温", "寒潮", "大风", "暴雨", "暴雪",
                        "冰雹", "雷电", "沙尘", "台风", "道路结冰")
@@ -447,7 +449,12 @@ class AlarmClient:
             if not m:                       # 「森林火险」「地质灾害」这种照样能进，靠类型筛
                 continue
             area, atype, level = m.group("area"), m.group("type"), m.group("level")
-            if self.areas and not any(a in area for a in self.areas):
+            # 地区留空 = 一个都不认（宁可安静，也别为陌生城市的霾开口）。
+            # 以前留空等于"全国都认"，所以默认值里才写死了一个城市；现在默认留空，
+            # 由使用者自己填，代码这边把空值当成"关闭预警"处理。
+            if not self.areas:
+                continue
+            if not any(a in area for a in self.areas):
                 continue
             if self.types and not any(t in atype for t in self.types):
                 continue
