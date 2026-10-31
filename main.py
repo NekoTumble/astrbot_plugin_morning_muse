@@ -1469,14 +1469,14 @@ class MorningMusePlugin(Star):
         if v <= 1.0:
             v *= 100
         if v < 15:
-            return "几乎没剩什么力气"
+            return "精力几乎见底"
         if v < 35:
-            return "只剩两成多"
+            return "精力只剩两成多"
         if v < 55:
-            return "差不多对半"
+            return "精力大概还剩一半"
         if v < 75:
-            return "还算有劲"
-        return "精神挺足"
+            return "精力还算够用"
+        return "精力挺足"
 
     def _format_life_only(self, life_state: dict, sleeping: bool = False,
                          interrupts: int = 0) -> str:
@@ -1502,9 +1502,9 @@ class MorningMusePlugin(Star):
                 where = f"家里（{place}）" if "家" in place else f"家里的{place}"
             n_wake = max(0, int(interrupts or 0))
             if n_wake <= 0:
-                lines.append(f"你正睡着：{where}，灯关着，屋里的声音慢慢的。")
+                lines.append(f"你正睡着：{where}，灯关着，屋子里静悄悄的。")
             else:
-                lines.append(f"你从睡里被叫起来：{where}，灯还关着，屋里静得能听见自己的呼吸。")
+                lines.append(f"你从睡里被叫起来：{where}，灯还关着，屋子里静悄悄的。")
             if energy:
                 lines.append(f"这一觉睡到现在，{energy}。")
             n = n_wake
