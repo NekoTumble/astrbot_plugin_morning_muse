@@ -7,3 +7,9 @@ __pycache__/
 *.bak_*
 *.tmp
 .DS_Store
+
+# ── 防呆（2026-10-31）──
+# 有人在这个目录里直接跑过脚本，相对路径 data/ 就落到了插件目录下，
+# 里面会带一份 cmd_config.json（含面板密码）。插件真正的数据在
+# /AstrBot/data/plugin_data/astrbot_plugin_morning_muse/，这里出现 data/ 一定是垃圾。
+data/
