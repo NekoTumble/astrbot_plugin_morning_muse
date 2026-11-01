@@ -1391,7 +1391,9 @@ class MorningMusePlugin(Star):
             interrupts = 0
             try:
                 if self.life_bridge is not None:
-                    interrupts = int(self.life_bridge.night_interrupt_count(persona_id) or 0)
+                    # 用「回数」而不是「区间数」：连着聊到天亮只算一回，
+                    # 否则每个整点各记一段，她会以为自己被叫起来三次
+                    interrupts = int(self.life_bridge.night_interrupt_rounds(persona_id) or 0)
             except Exception:
                 interrupts = 0
             self._append_dynamic_context(

@@ -278,6 +278,9 @@ class LifeBridgeManager:
         self._services: OrderedDict[str, Any] = OrderedDict()
         # P6：主人最后一次说话的时间（用来判断「她此刻醒着没」）
         self._last_user_msg: dict[str, datetime] = {}
+        # 今夜「主人说话的准确时间」——只放内存，用于数「真正被叫醒了几回」。
+        # 不从区间倒推：区间是按 tick 记的，终点是 tick 时刻，会让间隔看起来永远只有半小时。
+        self._user_msg_times: dict[str, list[datetime]] = {}
         self._lock = asyncio.Lock()
         # V10 修复：日程回灌「读记号→执行→写记号」专用锁。
         # 与 _lock 分开，避免与 _get_service 内部取同一把锁而死锁。
@@ -857,7 +860,13 @@ class LifeBridgeManager:
     def note_user_activity(self, persona_id: str, when: datetime | None = None) -> None:
         """主人刚说了话。只写内存，非常轻——每条消息都会调。"""
         try:
-            self._last_user_msg[persona_id] = when or self._local_now()
+            now = when or self._local_now()
+            self._last_user_msg[persona_id] = now
+            # 一并记进今夜时间线（只留最近 300 条，够一个通宵）
+            times = self._user_msg_times.setdefault(persona_id, [])
+            times.append(now)
+            if len(times) > 300:
+                del times[: len(times) - 300]
         except Exception:
             pass
 
@@ -1062,6 +1071,48 @@ class LifeBridgeManager:
                 continue
         return int(total / 60.0)
 
+    # 同一回被叫醒的判定：两段清醒之间不到这么久，就算「那次还没睡回去」
+    INTERRUPT_MERGE_MINUTES = 30
+
+    @staticmethod
+    def _count_time_groups(times, gap_minutes: int = 30) -> int:
+        """把「被打断的时间点」按间隔归组，数出**真正被叫醒了几回**。
+
+        规则：相邻两个时间点之间不到 `gap_minutes` 分钟 → 同一回（没睡回去）；
+        超过 → 新的一回。连着聊整夜只会数出 1 回。
+        """
+        try:
+            pts = sorted(t for t in (times or []) if isinstance(t, datetime))
+            if not pts:
+                return 0
+            groups = 1
+            last = pts[0]
+            for t in pts[1:]:
+                if (t - last).total_seconds() > gap_minutes * 60:
+                    groups += 1
+                last = t
+            return groups
+        except Exception:
+            return 0
+
+    def night_interrupt_rounds(self, persona_id: str, now: datetime | None = None,
+                               gap_minutes: int | None = None) -> int:
+        """今夜**真正被叫醒了几回**（间隔 ≤30 分钟算同一回）—— 给夜里的语气档用。
+
+        数据来源：① 内存里的说话时间线（准）；② 今夜已记区间的起点（进程重启后的兜底）。
+        跟 `night_interrupt_count`（原始区间数，给 /状态 看「醒了几段」）分开：
+        那个数"记录了几段"，这个数"你实际被打断了几回"。
+        """
+        now = now or self._local_now()
+        gap = self.INTERRUPT_MERGE_MINUTES if gap_minutes is None else int(gap_minutes)
+        times: list[datetime] = list(self._user_msg_times.get(persona_id) or [])
+        try:
+            for sp in (self._load_watch(persona_id).get(self._night_key(now)) or []):
+                times.append(datetime.fromisoformat(str(sp[0])))
+        except Exception:
+            pass
+        return self._count_time_groups(times, gap)
+
     def night_interrupt_count(self, persona_id: str, now: datetime | None = None) -> int:
         """昨夜被吵醒了几次（合并后的清醒区间数）—— 给 /状态 显示睡懒觉的因果用。"""
         now = now or self._local_now()
@@ -1109,8 +1160,37 @@ class LifeBridgeManager:
             logger.warning(f"[晨光心语] ⚠️ {persona_id} 睡眠回血失败: {e}")
             return False
 
-    # 多久没说话就算她"睡回去了"
+    # 多久没说话就算她"睡回去了"——这既是回血口径，也是「数回数」的归组窗口
     AWAKE_TAIL_MINUTES = 15
+
+    # 数「被叫醒几回」时，相邻两句超过这么久就算新的一回（跟上面同源，保持一个口径）
+    INTERRUPT_MERGE_MINUTES = 15
+
+    @staticmethod
+    def _spans_from_times(times, now: datetime, tail_minutes: int = 15):
+        """把一串「说话时间」整理成清醒区间。
+
+        规则：相邻两句间隔超过 `tail_minutes` 分钟就断开（中间她睡回去了）；
+        每段终点取 `min(现在, 最后一句 + tail_minutes)` —— 不再拖到 tick 时刻，
+        否则「1:05 说一句」会被记成 32 分钟，第二天就多睡半小时。
+        """
+        try:
+            pts = sorted(t for t in (times or []) if isinstance(t, datetime))
+            if not pts:
+                return []
+            tail = timedelta(minutes=int(tail_minutes))
+            out = []
+            start = pts[0]
+            last = pts[0]
+            for t in pts[1:]:
+                if (t - last) > tail:
+                    out.append((start, min(now, last + tail)))
+                    start = t
+                last = t
+            out.append((start, min(now, last + tail)))
+            return [(a, b) for a, b in out if b > a]
+        except Exception:
+            return []
 
     def _sleep_recover_sync(self, svc, persona_id: str = "") -> bool:
         """她睡着的每一轮心跳，精力往上走一小口——**但被吵醒的那部分不算**。
@@ -1164,7 +1244,12 @@ class LifeBridgeManager:
             # 被吵醒了：不清「清醒时长」，也不把 last_sleep_time 往后推
             if persona_id:
                 try:
-                    self._record_awake_span(persona_id, max(last, window_start), now)
+                    times = [t for t in (self._user_msg_times.get(persona_id) or [])
+                             if t >= window_start]
+                    if not times and last is not None:
+                        times = [last]
+                    for a, b in self._spans_from_times(times, now, self.AWAKE_TAIL_MINUTES):
+                        self._record_awake_span(persona_id, a, b)
                 except Exception:
                     pass
             if changed:
