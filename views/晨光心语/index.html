@@ -177,6 +177,22 @@
   .body .ovtag.orig{background:rgba(232,161,115,.24);border-style:solid;border-color:rgba(232,161,115,.75);color:#f8e2cc}
   /* 已经过去的格子整体会淡下去，但改过的那些要看得出来，别一起糊掉 */
   .slot.past.has-ov .body{opacity:.86}
+
+  /* ✏️ 动过的地方：一张卡里两种内容 —— 白天列出被改过的段，凌晨列出临时排的段 */
+  .ovrow{
+    display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;
+    padding:7px 0;border-bottom:1px solid var(--line);font-size:13px;line-height:1.7;
+  }
+  .ovrow:last-child{border-bottom:0}
+  .ovrow .k{color:var(--muted);font-size:11.5px;flex:0 0 auto;min-width:56px}
+  .ovrow .txt{color:#ded1c6;flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+  .ovrow .place{
+    font-size:11.5px;color:var(--muted);padding:1px 8px;border-radius:999px;
+    background:rgba(255,226,200,.055);border:1px solid var(--line);
+  }
+  .ovrow .ovtag{flex:0 0 auto;cursor:pointer}
+  .ovrow .ovtag.ghost{cursor:default;border-style:dotted;opacity:.75}
+  .ovrow .ovtag.ghost:hover{background:rgba(232,161,115,.10);border-color:rgba(232,161,115,.42);color:#e6c8ad}
   .body .txt{color:#ded1c6;white-space:pre-wrap}
 
   .note{
@@ -343,6 +359,14 @@
           <div class="skeleton" style="width:65%"></div>
         </div>
       </section>
+
+      <section class="card">
+        <h2><span class="ico">✏️</span>动过的地方<span class="tail" id="ov-tail"></span></h2>
+        <div id="override-card">
+          <div class="skeleton" style="width:70%"></div>
+          <div class="skeleton" style="width:45%"></div>
+        </div>
+      </section>
     </div>
   </div>
 </div>
@@ -390,7 +414,7 @@
       const actOrig = hasOv ? (it.activity_orig || actNew) : actNew;
       const placeNew = it.place || "";
       const placeOrig = hasOv ? (it.place_orig || placeNew) : placeNew;
-      const ovOn = (who || "她") + "改了";
+      const ovOn = (who || "她") + "改的";
       const ovOff = (who || "她") + "原本的";
       html += '<li class="slot ' + cls + (hasOv ? " has-ov" : "") + '">' +
         '<div class="t">' + esc(it.emoji) + " " + esc(it.time) + "</div>" +
@@ -412,26 +436,75 @@
     return html;
   }
 
-  // 点「XX 改了」那个小签：在改后的 / 原本的之间切换（就地换，不重新取数）
+  // 点「XX 改的」那个小签：在改后的 / 原本的之间切换（就地换，不重新取数）
+  // 日程卡那颗和「✏️ 动过的地方」卡里那颗都走这里。
   document.addEventListener("click", (e) => {
     const tag = e.target && e.target.closest ? e.target.closest(".ovtag") : null;
-    if (!tag) return;
-    const li = tag.closest(".slot");
-    if (!li) return;
+    if (!tag || tag.tagName !== "BUTTON") return;      // 「夜晚活动」只是个签，不响应点击
+    const host = tag.closest(".slot") || tag.closest(".ovrow");
+    if (!host) return;
     const showingOrig = !tag.classList.contains("orig");
     tag.classList.toggle("orig", showingOrig);
-    tag.textContent = showingOrig ? (tag.dataset.off || "原本的") : (tag.dataset.on || "改了");
-    const txt = li.querySelector(".txt");
+    tag.textContent = showingOrig ? (tag.dataset.off || "原本的") : (tag.dataset.on || "改的");
+    const txt = host.querySelector(".txt");
     if (txt) {
       const v = showingOrig ? txt.getAttribute("data-orig") : txt.getAttribute("data-new");
       if (v != null) txt.textContent = v;
     }
-    const place = li.querySelector(".place");
+    const place = host.querySelector(".place");
     if (place) {
       const v = showingOrig ? place.getAttribute("data-orig") : place.getAttribute("data-new");
       if (v != null) place.textContent = v;
     }
   });
+
+  // ✏️ 动过的地方：白天列被改过的段（可点切原件），凌晨列临时排的段（带「夜晚活动」）
+  function renderOverride(ov) {
+    const box = $("override-card");
+    if (!box) return;
+    const who = (state.data && state.data.persona) || "";
+    const mode = (ov && ov.mode) || "dawn";
+    const items = (ov && ov.items) || [];
+    // 副标题（标题右边那行小字）：白天「她改过的」，凌晨「她的夜间活动」
+    const tail = $("ov-tail");
+    if (tail) {
+      tail.textContent = mode === "day"
+        ? (who ? who + "改过的" : "改过的")
+        : (who ? who + "的夜间活动" : "夜间活动");
+    }
+    if (!items.length) {
+      box.innerHTML = '<div class="empty">' +
+        (mode === "day" ? "和早上那份一样。" : "今晚还没另外排。") + "</div>";
+      return;
+    }
+    const isDay = mode === "day";
+    const onLabel = esc((who || "她") + "改的");
+    const offLabel = esc((who || "她") + "原本的");
+    let html = "";
+    items.forEach((it) => {
+      const head = isDay
+        ? esc(it.emoji || "") + " " + esc(it.slot || "")
+        : esc(it.emoji || "🌙") + " " + esc(it.range || "");
+      const act = it.activity || "";
+      const actOrig = isDay ? (it.activity_orig || act) : act;
+      const place = it.place || "";
+      const placeOrig = isDay ? (it.place_orig || place) : place;
+      const tag = isDay
+        ? '<button type="button" class="ovtag" data-on="' + onLabel + '" data-off="' + offLabel +
+          '" title="点一下看原本排的是什么">' + onLabel + "</button>"
+        : '<span class="ovtag ghost">夜晚活动</span>';
+      html += '<div class="ovrow">' +
+        '<span class="k">' + head + "</span>" +
+        '<span class="txt" data-new="' + esc(act) + '" data-orig="' + esc(actOrig) + '">' +
+        esc(act) + "</span>" +
+        (place
+          ? '<span class="place" data-new="' + esc(place) + '" data-orig="' + esc(placeOrig) +
+            '">' + esc(place) + "</span>"
+          : "") +
+        tag + "</div>";
+    });
+    box.innerHTML = html;
+  }
 
   // 凌晨那段：今天的还没生成，显示昨晚那份 + 一句"她现在在睡"
   function nightBlock(sched, when) {
@@ -633,6 +706,7 @@
     renderSchedule(data.schedule, data.config);
     renderStatus(data.status || {});
     renderConfig(data.config || {});
+    renderOverride(data.override || {});
     $("rewriteBtn").disabled = false;
   }
 
@@ -684,6 +758,7 @@
       );
       const data = res && res.data !== undefined ? res.data : res;
       if (data && data.schedule) renderSchedule(data.schedule, (state.data || {}).config);
+    if (data && data.override) renderOverride(data.override);
       const now = new Date();
       const hh = String(now.getHours()).padStart(2, "0");
       const mm = String(now.getMinutes()).padStart(2, "0");

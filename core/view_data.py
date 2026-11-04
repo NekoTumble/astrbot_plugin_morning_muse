@@ -169,9 +169,20 @@ async def build_schedule_view(plugin, persona_id: str, now: datetime.datetime = 
             yesterday = today - datetime.timedelta(days=1)
             old = await plugin.storage.load_schedule(persona_id, yesterday)
             if old:
+                # 回落显示的也是「那一天」，所以那天的补丁照样要盖上：
+                # 不然昨晚被改过的格一到 0 点就变回原件，「XX 改了」也跟着不见了。
+                origin_old = old
+                try:
+                    from .schedule_override import load as _load_override
+                    from .schedule_override import merge_all as _merge_all
+
+                    _ov_y = await _load_override(plugin, persona_id, yesterday)
+                    old = _merge_all(old, _ov_y) or old
+                except Exception:
+                    pass
                 view.update(
                     {
-                        "items": _items_of(old, cur),
+                        "items": _items_of(old, cur, origin=origin_old),
                         "outfit": str(old.get("outfit") or ""),
                         "outfit_style": str(old.get("outfit_style") or ""),
                         "note": str(old.get("note") or ""),
@@ -463,6 +474,73 @@ async def collect_report(plugin, include_prompts: bool = True) -> dict:
     return report
 
 
+def _override_card_row(cell: dict, orig: dict = None) -> dict:
+    """「动过的地方」里的一行：改后的正文 + 原件（页面点标签就地切换用）。"""
+    label = str((cell or {}).get("time") or "")
+    act = strip_legacy_period_prefix(str((cell or {}).get("activity") or ""), label)
+    o = orig if isinstance(orig, dict) else {}
+    act_orig = strip_legacy_period_prefix(str(o.get("activity") or ""), label) if o else act
+    return {
+        "slot": label,
+        "emoji": period_emoji(label),
+        "activity": act,
+        "activity_orig": act_orig,
+        "place": place_text(cell or {}, location_zh),
+        "place_orig": place_text(o, location_zh) if o else place_text(cell or {}, location_zh),
+    }
+
+
+async def build_override_card(plugin, persona_id: str, now: datetime.datetime = None) -> dict:
+    """页面「✏️ 动过的地方」那张卡的内容（2026-11-05 加）。
+
+    按「**今天这份有没有生成**」切换，切换时刻就是生成时间，不写死某个钟点：
+
+    - 有今天日程 → `mode="day"`：只列被改过的那几段（页面上带「小夜改的」，可点切原件）；
+    - 没有今天日程 → `mode="dawn"`：列凌晨临时排的那几段（带「夜晚活动」）；
+      只在「还没到今天的生成时间」时算数 —— 过了生成点它本来就作废了。
+    """
+    today = plugin._get_today()
+    now = now or plugin._get_now()
+    try:
+        from .schedule_override import load as _load_ov
+        from .schedule_override import merge_all as _merge_all
+        from .schedule_override import predawn_segments, predawn_window_open
+
+        ov = await _load_ov(plugin, persona_id, today)
+    except Exception:
+        return {"mode": "dawn", "items": []}
+
+    data = await plugin.storage.load_schedule(persona_id, today)
+    if data:
+        merged = _merge_all(data, ov) or data
+        base = data.get("schedule") or []
+        items = []
+        for i, cell in enumerate(merged.get("schedule") or []):
+            if not isinstance(cell, dict) or not cell.get("_ov"):
+                continue
+            orig = base[i] if i < len(base) and isinstance(base[i], dict) else {}
+            items.append(_override_card_row(cell, orig))
+        return {"mode": "day", "items": items}
+
+    items = []
+    try:
+        window_open = predawn_window_open(plugin, now)
+    except Exception:
+        window_open = False
+    if window_open:
+        for seg in predawn_segments(ov):
+            til = seg.get("until_hour")
+            items.append({
+                "slot": "",
+                "emoji": "🌙",
+                "range": (f"{seg['from_hour']:02d}:00–{til:02d}:00"
+                          if til is not None else f"{seg['from_hour']:02d}:00 之后"),
+                "activity": str(seg.get("activity") or ""),
+                "place": place_text({"location": seg.get("location")}, location_zh),
+            })
+    return {"mode": "dawn", "items": items}
+
+
 async def build_overview(plugin, persona_id: str = "") -> dict:
     """页面一打开要的全部东西：三块 + 人格清单 + 服务端时间。"""
     now = plugin._get_now()
@@ -505,6 +583,7 @@ async def build_overview(plugin, persona_id: str = "") -> dict:
         ),
         "personas": personas,
         "schedule": await build_schedule_view(plugin, pid, now=now),
+        "override": await build_override_card(plugin, pid, now=now),
         "status": await collect_status(plugin, pid),
         "config": config,
     }
