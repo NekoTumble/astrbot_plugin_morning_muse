@@ -165,6 +165,18 @@
     font-size:11px;letter-spacing:.6px;color:#2a1a11;font-weight:600;border-radius:999px;padding:1px 9px;
     background:linear-gradient(160deg,#f2b487,#dd9265);
   }
+  /* v1.5.31：这一格是聊天里临时改的（纯显示，不参与任何判断）。
+     可以点：点一下在「改后的」和「原本排的」之间切换，默认看改后的。 */
+  .body .ovtag{
+    font-size:10.5px;letter-spacing:.3px;color:#e6c8ad;border-radius:999px;padding:1px 8px;
+    background:rgba(232,161,115,.10);border:1px dashed rgba(232,161,115,.42);
+    font-family:inherit;line-height:1.6;cursor:pointer;appearance:none;-webkit-appearance:none;
+    transition:.18s;
+  }
+  .body .ovtag:hover{background:rgba(232,161,115,.20);border-color:rgba(232,161,115,.72);color:#f6dcc4}
+  .body .ovtag.orig{background:rgba(232,161,115,.24);border-style:solid;border-color:rgba(232,161,115,.75);color:#f8e2cc}
+  /* 已经过去的格子整体会淡下去，但改过的那些要看得出来，别一起糊掉 */
+  .slot.past.has-ov .body{opacity:.86}
   .body .txt{color:#ded1c6;white-space:pre-wrap}
 
   .note{
@@ -367,20 +379,59 @@
   // ── 渲染：今日日程 ─────────────────────────────────────
   // 时间线（dim=true 用于"昨晚那份"的灰调）
   function timelineHtml(items, dim) {
+    // 小标的落款用页面当前人格名（跟 nightBlock 里那个 who 同一个来源）
+    const who = (state.data && state.data.persona) || "";
     let html = '<ul class="timeline' + (dim ? " dim" : "") + '">';
     (items || []).forEach((it) => {
       const cls = it.is_now ? "now" : (it.is_past ? "past" : "");
-      html += '<li class="slot ' + cls + '">' +
+      const hasOv = !!it.overridden;
+      // 被改过的格：正文/地点各存两份，点小签就地切换（默认显示改后的）
+      const actNew = it.activity || "";
+      const actOrig = hasOv ? (it.activity_orig || actNew) : actNew;
+      const placeNew = it.place || "";
+      const placeOrig = hasOv ? (it.place_orig || placeNew) : placeNew;
+      const ovOn = (who || "她") + "改了";
+      const ovOff = (who || "她") + "原本的";
+      html += '<li class="slot ' + cls + (hasOv ? " has-ov" : "") + '">' +
         '<div class="t">' + esc(it.emoji) + " " + esc(it.time) + "</div>" +
         '<div class="dot"></div>' +
         '<div class="body"><div class="top">' +
         (it.is_now ? '<span class="nowtag">此刻</span>' : "") +
-        (it.place ? '<span class="place">' + esc(it.place) + "</span>" : "") +
-        '</div><div class="txt">' + esc(it.activity) + "</div></div></li>";
+        (hasOv
+          ? '<button type="button" class="ovtag" data-on="' + esc(ovOn) + '" data-off="' +
+            esc(ovOff) + '" title="点一下看原本排的是什么">' + esc(ovOn) + "</button>"
+          : "") +
+        (placeNew
+          ? '<span class="place" data-new="' + esc(placeNew) + '" data-orig="' +
+            esc(placeOrig) + '">' + esc(placeNew) + "</span>"
+          : "") +
+        '</div><div class="txt" data-new="' + esc(actNew) + '" data-orig="' + esc(actOrig) +
+        '">' + esc(actNew) + "</div></div></li>";
     });
     html += "</ul>";
     return html;
   }
+
+  // 点「XX 改了」那个小签：在改后的 / 原本的之间切换（就地换，不重新取数）
+  document.addEventListener("click", (e) => {
+    const tag = e.target && e.target.closest ? e.target.closest(".ovtag") : null;
+    if (!tag) return;
+    const li = tag.closest(".slot");
+    if (!li) return;
+    const showingOrig = !tag.classList.contains("orig");
+    tag.classList.toggle("orig", showingOrig);
+    tag.textContent = showingOrig ? (tag.dataset.off || "原本的") : (tag.dataset.on || "改了");
+    const txt = li.querySelector(".txt");
+    if (txt) {
+      const v = showingOrig ? txt.getAttribute("data-orig") : txt.getAttribute("data-new");
+      if (v != null) txt.textContent = v;
+    }
+    const place = li.querySelector(".place");
+    if (place) {
+      const v = showingOrig ? place.getAttribute("data-orig") : place.getAttribute("data-new");
+      if (v != null) place.textContent = v;
+    }
+  });
 
   // 凌晨那段：今天的还没生成，显示昨晚那份 + 一句"她现在在睡"
   function nightBlock(sched, when) {

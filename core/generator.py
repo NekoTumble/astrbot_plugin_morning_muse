@@ -222,6 +222,14 @@ class ScheduleGenerator:
         try:
             await self.storage.save_schedule(persona_id, today, schedule_data)
             self._add_log("info", f"{persona_id} 日程已保存")
+            # 凌晨那条临时格到此为止：它已经作为「今天凌晨那一段」喂进这一份了，不留残渣。
+            # 保存失败就不清（下次生成还要靠它），所以放在 try 里面。
+            try:
+                from .schedule_override import clear_predawn
+
+                await clear_predawn(self.plugin, persona_id, today)
+            except Exception as e:
+                logger.debug(f"[晨光心语] 凌晨临时格清理失败（不影响日程）: {e}")
         except Exception as e:
             self._add_log("error", f"保存日程失败: {e}")
 

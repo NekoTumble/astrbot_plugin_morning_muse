@@ -17,6 +17,7 @@ from astrbot.core.agent.message import TextPart
 
 from .commands.debug import DebugCommands
 from .commands.schedule import PersonaCommands, ScheduleCommands
+from .core import schedule_override
 from .core.poi_client import PoiClient
 from .core.config_defaults import schema_default
 from .core.context_builder import ContextBuilder
@@ -25,6 +26,10 @@ from .core.generator import ScheduleGenerator
 from .core.life_bridge import (
     LifeBridgeManager,
     activity_zh,
+    # v1.5.31 修：_format_life_only 里用了 location_zh 却没导入 —— v1.5.30 起
+    # 夜里那段「[此刻]」注入一直在抛 NameError（她夜里收不到「自己在哪」）。
+    # 这条是静态检查抓出来的，两套离线自检都因为给桩而漏掉了它。
+    location_zh,
     mood_zh,
 )
 from .core.external_memory import ExternalMemory
@@ -148,6 +153,8 @@ class MorningMusePlugin(Star):
         self._config = config
 
         self.storage: ScheduleStorage | None = None
+        # 插件数据目录（overrides/ 补丁层也挂在它下面）；_async_init 里才定下来
+        self.data_dir: Path | None = None
         self.generator: ScheduleGenerator | None = None
         self.scheduler: MorningScheduler | None = None
         self.dynamic_styles: dict[str, str] = {}
@@ -229,6 +236,8 @@ class MorningMusePlugin(Star):
             data_dir = Path("data/plugin_data/astrbot_plugin_morning_muse")
             data_dir.mkdir(parents=True, exist_ok=True)
             logger.info("✅ 数据目录: " + str(data_dir.absolute()))
+            # 补丁层（overrides/）要用它；放在 storage/state 之前，谁先读都不怕
+            self.data_dir = data_dir
 
             schedules_dir = data_dir / "schedules"
             cache_size = self.get_config("storage.storage_cache_size", 200)
@@ -930,6 +939,52 @@ class MorningMusePlugin(Star):
         reply = await cmd.cmd_view_schedule(event.message_str, event)
         yield event.plain_result(reply)
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("撤销调整", desc="把今天临时改过的安排撤回早上那份（今天用掉的次数不退还）")
+    async def undo_override(self, event: AstrMessageEvent):
+        if not self._ready:
+            yield event.plain_result("✅ 插件仍在初始化，请稍后重试～")
+            return
+        persona_id = await self._get_persona_id(event)
+        today = self._get_today()
+        try:
+            ov = await schedule_override.load(self, persona_id, today)
+        except Exception as e:
+            yield event.plain_result(f"读不出今天的临时改动：{e}")
+            return
+
+        n = len(ov.get("items") or [])
+        had_predawn = bool(ov.get("predawn"))
+        if not n and not had_predawn:
+            yield event.plain_result("今天没临时改过什么，不用撤喵。")
+            return
+
+        # 只清内容，两本账都留着 —— 否则「改-撤-改」能把每天的额度刷没
+        kept = schedule_override.empty(today)
+        kept["calls"] = int(ov.get("calls") or 0)
+        kept["calls_night"] = int(ov.get("calls_night") or 0)
+        try:
+            await schedule_override.save(self, persona_id, today, kept)
+        except Exception as e:
+            logger.warning(f"[晨光心语] ⚠️ 撤销临时调整失败: {e}")
+            yield event.plain_result(f"没撤成：{e}")
+            return
+
+        logger.info(
+            f"[晨光心语] {persona_id} 撤销临时调整：清掉 {n} 段"
+            f"（凌晨那条{'也清了' if had_predawn else '没动'}）"
+        )
+        parts = []
+        if n:
+            parts.append(f"改过的 {n} 段")
+        if had_predawn:
+            parts.append("凌晨改的那一段")
+        left = max(0, schedule_override.max_day(self) - kept["calls"])
+        yield event.plain_result(
+            f"撤好了 —— {'、'.join(parts)}都回到早上排的样子。"
+            f"（今天白天还能改 {left} 回）"
+        )
+
     @filter.command("重写日程", desc="仅重新生成当前会话绑定人格的今日日程")
     async def rewrite_schedule(self, event: AstrMessageEvent):
         if not self._ready:
@@ -1250,6 +1305,260 @@ class MorningMusePlugin(Star):
         await self._save_dynamic_data()
         yield event.plain_result(reply)
 
+    # ───────── 工具：她自己把今天的安排改掉（v1.5.31） ─────────
+    # 这是一条**只回给模型**的通道：return 的东西进 tool result，聊天里一个字都不出现。
+    # ★ 绝不 yield event.plain_result() —— 那会真的发到聊天里，打断她自己的话。
+    #
+    # ★★ 工具描述必须写在 docstring 的**第一段**：AstrBot 4.29.x 的
+    #   `register_llm_tool` 只把 `docstring.description` 传给 `add_func(..., desc, ...)`，
+    #   而 `@filter.llm_tool(description="…")` 这个 kwarg 会被**静默丢掉**
+    #   （源码 astrbot/core/star/register/star_handler.py:610 起，2026-11-04 在容器里读过）。
+    #   交接文档里那种 description=(…) 的写法，模型其实一个字都看不到，那几条判据全丢。
+    #
+    # ★★ **别在这里加 `@filter.permission_type(...)`**（2026-11-04 真机踩到）：
+    #   装饰器是内层先跑，`permission_type` 会先 `get_handler_or_create(fn, AdapterMessageEvent)`
+    #   把 handler 的事件类型**钉成消息事件**；外层 `llm_tool` 再取这个 handler 时类型不会改。
+    #   后果：这个函数**每条消息都会被当成消息处理器调一遍**，然后因为缺参数报
+    #   `Plugin Handler arguments do not match its definition.`（没崩，但每条消息刷一条错）。
+    #   而且它也拦不住工具调用（工具不走 event_filters）。权限闸见方法体里那段。
+    @filter.llm_tool(name="adjust_today_schedule")
+    async def adjust_today_schedule(self, event: AstrMessageEvent,
+                                    activity: str, location_hint: str = "",
+                                    from_slot: str = "", until: str = "",
+                                    plan: list = None,
+                                    reason: str = "") -> str:
+        """把今天还没到的安排改一下。只在你已经把话说定、而且跟原本排的不一样的时候才动：你答应了一起去某个地方、说好一起睡、自己改了主意并且说出口了。他提议、他劝你、他问你想不想 —— 这些都还不算，你还没点头，就别动。只是想一想、还没定、或者闲聊里随口提一句，也别动。已经过去的时段改不了，也别去动它。改哪几段照你们说定的来：说好是晚上，就只动晚上；没说范围，才从现在铺到收尾。天没亮、今天那份还没出来那阵子，可以一次把几个时间点都排好，不用一件一件来。改完不用跟他说你改了什么，照常说话就行。
+
+        Args:
+            activity(string): 改成做什么，一句话，别写时段和天气（排多段时可以留空）
+            location_hint(string): 在哪，用平时的说法，可留空
+            from_slot(string): 从哪一段起改（清晨/上午/午间/下午/傍晚/晚间），留空就是从现在这一段起
+            until(string): 改到哪为止 —— 白天说时段（清晨/上午/午间/下午/傍晚/晚间），天没亮那阵子说钟点（像 07:00）；只改一段就跟 from_slot 填成一样；留空就是改到今天收尾
+            plan(array[string]): 一次排好几段时用：每段写成「时刻 做什么」，像 ["03:00 在客厅陪他坐着", "06:30 回卧室睡觉"]；几点都写钟点，按先后顺序；只在今天那份还没出来那阵子用
+            reason(string): 为什么改，一句话，只给自己看
+        """
+        plan_items = schedule_override.parse_plan(plan)
+        act = str(activity or "").strip()
+        if not act and plan_items:
+            act = str(plan_items[0].get("activity") or "").strip()   # 白天那条路只认一句
+        if not act and not plan_items:
+            return "[没动] 还没说要改成什么。"
+        if not self._ready or self.storage is None:
+            return ""          # 插件还没就绪：静默，别让她为这事分心
+        if not schedule_override.enabled(self):
+            return ""
+
+        # 权限：AstrBot 4.29.x 里 `@filter.permission_type` 只挂在**消息事件管线**上，
+        # **拦不住工具调用**（工具是 tool_loop_agent_runner 直接调 handler，不过滤器）。
+        # 所以这里自己兜一层：私聊一律放行（那是主人自己的会话），
+        # 群里只在确认是管理员时放行 —— 拿不准就不动，宁可不改，也别替群友改她的日程。
+        try:
+            if not event.is_private_chat():
+                role = str(getattr(event, "role", "") or "").lower()
+                if role not in ("admin", "owner"):
+                    return ""
+        except Exception:
+            pass
+
+        persona_id = await self._get_persona_id(event)
+        now = self._get_now()
+        today = self._get_today()
+
+        # 睡眠窗口内不动 —— 那几格归「睡眠硬接管」管（v1.5.30 的钉整窗逻辑一个字都不碰）
+        try:
+            from .core.view_data import in_sleep_window
+
+            if in_sleep_window(self, persona_id):
+                return "[没动] 你这会儿在睡着，先不用管安排。"
+        except Exception:
+            pass
+
+        base = await self.storage.load_schedule(persona_id, today)
+        ov = await schedule_override.load(self, persona_id, today)
+
+        if not base:
+            # 今天这份还没生成：只有「凌晨 → 今天的生成点」这一小段能改。
+            # 两种排法都支持：① 一次一段（activity + until 钟点）；
+            # ② 一次把几段全排好（plan = ["03:00 在客厅坐着", "06:30 回卧室睡觉"]）。
+            if not schedule_override.predawn_window_open(self, now):
+                return "[没动] 今天还没开始排，先不用改。"
+            night_limit = schedule_override.max_night(self)
+            if int(ov.get("calls_night") or 0) >= night_limit:
+                return f"[没动] 这会儿已经改过 {night_limit} 回了，先这样待着。"
+
+            gen = schedule_override.schedule_time_of(self)
+            loc_hint = schedule_override.location_key(location_hint)
+            why = str(reason or "").strip()[:40]
+            stamp = now.isoformat(timespec="seconds")
+            new_segs = []
+
+            if plan_items:
+                # 一次排好几段：每段自带时刻，终点自动接到下一段的起点
+                for seg in schedule_override.segments_from_plan(plan_items, now.hour):
+                    if seg["from_hour"] >= gen.hour:
+                        continue          # 已经过了生成时间，排了也没用
+                    if seg.get("until_hour") is not None and seg["until_hour"] > gen.hour:
+                        seg["until_hour"] = None
+                    seg["location"] = (
+                        schedule_override.location_key(seg["activity"]) or loc_hint
+                    )
+                    seg["reason"] = why
+                    seg["ts"] = stamp
+                    new_segs.append(seg)
+                if not new_segs:
+                    return "[没动] 那几个点都过去了，改了也接不上。"
+            else:
+                # 排到几点：这段用的是钟点（"07:00" / "7点"），也允许她顺口说个时段名
+                until_hour = schedule_override.parse_hour(until)
+                if until_hour is None and str(until or "").strip():
+                    _si = schedule_override.slot_index(until)
+                    if _si is not None:
+                        until_hour = schedule_override.PERIOD_START_HOUR.get(
+                            schedule_override.PERIOD_ORDER[_si]
+                        )
+                if until_hour is not None and (
+                    until_hour <= now.hour or until_hour > gen.hour
+                ):
+                    until_hour = None  # 过去的点、或越过生成时间的点，都当没说
+                new_segs.append({
+                    "from_hour": now.hour,
+                    "until_hour": until_hour,
+                    "activity": act,
+                    "location": loc_hint,
+                    "reason": why,
+                    "ts": stamp,
+                })
+
+            ov["predawn"] = schedule_override._norm_predawn(
+                list(ov.get("predawn") or []) + new_segs
+            )      # 同一个整点改口 = 后一条覆盖前一条（按 from_hour 去重并排序）
+            ov["calls_night"] = int(ov.get("calls_night") or 0) + 1
+            try:
+                await schedule_override.save(self, persona_id, today, ov)
+            except Exception as e:
+                logger.warning(f"[晨光心语] ⚠️ 凌晨临时格没写进去（本轮按原样）: {e}")
+                return "[没动] 这一下没记上，先照现在这样。"
+
+            logger.info(
+                f"[晨光心语] {persona_id} 凌晨临时格 "
+                f"{len(new_segs)} 段："
+                + "、".join(
+                    f"{s['from_hour']:02d}:00"
+                    f"{'–%02d:00' % s['until_hour'] if s.get('until_hour') is not None else ' 起'}"
+                    f"→{s['activity']}" for s in new_segs
+                )
+                + f"（{why}）"
+            )
+            # 顺带把她「此刻」那几格也铺上 —— 否则页面/`/状态` 还会说她在看书。
+            # 每段各铺自己那一段；睡眠窗口里的整点由 push_predawn 自己让路，这里不重复判。
+            if self.get_config("schedule_override.sync_life", True):
+                for s in new_segs:
+                    try:
+                        touched = await schedule_override.push_predawn(
+                            self, persona_id, s["activity"], s.get("location", ""),
+                            until_hour=s.get("until_hour"),
+                            from_hour=s["from_hour"], now=now,
+                        )
+                        if touched:
+                            logger.info(
+                                f"[晨光心语] 凌晨临时格已铺进状态机：{'、'.join(touched[:4])}"
+                            )
+                    except Exception as e:
+                        logger.debug(f"[晨光心语] 凌晨临时格铺状态机失败（已降级）: {e}")
+
+            _all = schedule_override.predawn_segments(ov)
+            if len(_all) == 1 and not plan_items:
+                s = _all[0]
+                span = (
+                    f"这会儿到 {s['until_hour']:02d}:00"
+                    if s.get("until_hour") is not None else "这会儿起"
+                )
+                return (
+                    f"[已经按这个算了] {span}：{s['activity']}。\n"
+                    "往下就这样，不用再改一次。\n"
+                    "回话别念这一条。"
+                )
+            # 多段：把排好的整份念给她看（不含「刚在聊天里说好的」这种外壳）
+            inner = schedule_override.predawn_note(ov)
+            inner = inner.strip("（）").replace("刚在聊天里说好的：", "", 1).strip()
+            return (
+                f"[已经按这个算了] 给你排好了：{inner}。\n"
+                "往下就这样，不用再改一次。\n"
+                "回话别念这一条。"
+            )
+
+        limit = schedule_override.max_day(self)
+        if int(ov.get("calls") or 0) >= limit:
+            return f"[没动] 今天已经改过 {limit} 回了，先按现在这样过。"
+
+        cur_label, cur_idx = schedule_override.current_slot(now)
+        a_raw = schedule_override.slot_index(from_slot)
+        b_raw = schedule_override.slot_index(until)
+        # 她要是把整段都指在过去（"改一下上午"这种，现在是晚上）——不夹，直接说清楚。
+        if b_raw is not None and b_raw < cur_idx:
+            return "[没动] 那一格已经过去了，改了会把今天弄得前后不接。"
+
+        start = cur_idx if a_raw is None else max(a_raw, cur_idx)
+        end = 5 if b_raw is None else max(b_raw, start)
+        from_label = schedule_override.PERIOD_ORDER[start]
+        until_label = schedule_override.PERIOD_ORDER[end]
+
+        # 成功返回里那句「改到哪」要说真话（夹过之后的真实范围），她下一眼才看得见。
+        # 起点被夹到此刻（或压根没说）时，一律从「现在」说起 —— 别把「清晨」说给她听。
+        from_now = a_raw is None or a_raw <= cur_idx
+        if b_raw is None:
+            span = "从现在到今晚收尾" if from_now else f"从{from_label}到今晚收尾"
+        elif start == end:
+            span = f"只改{from_label}这一段"
+        elif from_now:
+            span = f"从现在到{until_label}"
+        else:
+            span = f"{from_label}到{until_label}"
+
+        patch = {
+            "from_hour": schedule_override.PERIOD_START_HOUR.get(from_label, now.hour),
+            "until_hour": schedule_override.PERIOD_START_HOUR.get(until_label, 21) + 2,
+            "from_period": from_label,
+            "until_period": until_label,
+            "activity": act,
+            "location": schedule_override.location_key(location_hint),
+            "reason": str(reason or "").strip()[:40],
+            "source": "tool",
+            "ts": now.isoformat(timespec="seconds"),
+        }
+        ov["items"] = list(ov.get("items") or []) + [patch]
+        ov["calls"] = int(ov.get("calls") or 0) + 1
+        try:
+            await schedule_override.save(self, persona_id, today, ov)
+        except Exception as e:
+            logger.warning(f"[晨光心语] ⚠️ 临时调整没写进去（本轮按原样）: {e}")
+            return "[没动] 这一下没记上，先照现在这样。"
+
+        logger.info(
+            f"[晨光心语] {persona_id} 临时调整：{from_label}→{until_label} → {act}"
+            f"（{patch['reason']}）"
+        )
+        # 改完顺手把补丁那几格铺进状态机 —— 否则页面显示改了她人还在图书馆。
+        # 「只铺当前及以后」「睡眠窗口让路」由 align_schedule_slots 自己把关。
+        if self.get_config("schedule_override.sync_life", True):
+            try:
+                touched = await schedule_override.push_window(
+                    self, persona_id, from_label, until_label, act,
+                    patch.get("location", ""), now=now,
+                )
+                if touched:
+                    logger.info(
+                        f"[晨光心语] 临时调整已铺进状态机：{'、'.join(touched[:4])}"
+                    )
+            except Exception as e:
+                logger.debug(f"[晨光心语] 临时调整铺状态机失败（已降级）: {e}")
+
+        return (
+            f"[已经按这个算了] {span}：{act}。\n"
+            "往下就这样，不用再改一次。\n"
+            "回话别念这一条。"
+        )
+
     # priority=-1：AstrBot 的钩子按 priority **降序**跑。给个负数，保证自己排在记忆插件
     # 后面 —— 它们刚塞进 req 的记忆块，我们才看得见（从此不靠插件加载顺序碰运气）。
     @filter.on_llm_request(
@@ -1356,6 +1665,19 @@ class MorningMusePlugin(Star):
                 pass
 
         if schedule:
+            # 补丁层：聊天里临时说定的安排盖在早上那份上面 —— **原件一个字节都不写**。
+            # 失败一律降级成原件：宁可显示旧的，也不能让整轮对话挂掉。
+            try:
+                _ov = await schedule_override.load(self, persona_id, today)
+                # 整天全量合并（不是我「此刻之后」）：过去那几格如果被改过，
+                # 注入里也该是改后的样子 —— 否则她晚上回头看会说「我下午在家看书」。
+                schedule = schedule_override.merge_all(schedule, _ov)
+                # 今天这份已经在手上了 → 凌晨那条临时格到此为止（它该喂的那次已经过去了）
+                if _ov.get("predawn"):
+                    _ov["predawn"] = []
+                    await schedule_override.save(self, persona_id, today, _ov)
+            except Exception as e:
+                logger.warning(f"[晨光心语] ⚠️ 临时补丁合成失败（按原件继续）: {e}")
 
             # 主动分享钩子（R4）：她今天有没有想主动跟你说的事
             share_lines = []
@@ -1396,10 +1718,23 @@ class MorningMusePlugin(Star):
                     interrupts = int(self.life_bridge.night_interrupt_rounds(persona_id) or 0)
             except Exception:
                 interrupts = 0
-            self._append_dynamic_context(
-                req,
-                self._format_life_only(life_state, sleeping=sleeping, interrupts=interrupts),
-            )
+            # 注意：_format_life_only 本身一个字都不改（夜里那四档语气 + 赖床/被打断都归它），
+            # 凌晨临时格这一行是**在它外面**追加的。
+            text = self._format_life_only(life_state, sleeping=sleeping, interrupts=interrupts)
+            try:
+                _ovn = await schedule_override.load(self, persona_id, today)
+                if _ovn.get("predawn"):
+                    if not schedule_override.predawn_window_open(self, self._get_now()):
+                        # 过了今天的生成点还没生成：这条作废（按「生成失败一律拒」那条口径）
+                        _ovn["predawn"] = None
+                        await schedule_override.save(self, persona_id, today, _ovn)
+                    elif not sleeping:
+                        note = schedule_override.predawn_note(_ovn)
+                        if note:
+                            text = text + "\n" + note
+            except Exception as e:
+                logger.debug(f"[晨光心语] 凌晨临时格注入失败（忽略）: {e}")
+            self._append_dynamic_context(req, text)
 
     # 六个模糊时段 → 大致钟点（和天气、状态机用的是同一套）
     _PERIOD_ORDER = ["清晨", "上午", "午间", "下午", "傍晚", "晚间"]
@@ -1554,8 +1889,14 @@ class MorningMusePlugin(Star):
         if not self.get_config("inject.realtime_slice", True):
             lines = ["[今日日程]"]
             lines.append(f"穿搭：{schedule.get('outfit', '')}")
+            prev_ov = False
             for item in schedule.get("schedule", []):
                 lines.append(f"- {item.get('time')}: {self._activity_text(item)}")
+                is_ov = bool(item.get("_ov"))
+                if is_ov and not prev_ov:
+                    # 连续被改的那几格只标一次，别让同一句话连刷三遍
+                    lines.append(schedule_override.OVERRIDE_NOTE)
+                prev_ov = is_ov
             note = schedule.get("note", "").strip()
             if note:
                 lines.append(f"寄语：{note}")
@@ -1582,8 +1923,15 @@ class MorningMusePlugin(Star):
         lines.append(f"穿搭：{schedule.get('outfit', '')}")
         if past:
             lines.append("（今天早些时候，已经做过）")
+            prev_ov = False
             for item in past:
                 lines.append(f"- {item.get('time')}: {self._activity_text(item)}")
+                is_ov = bool(item.get("_ov"))
+                if is_ov and not prev_ov:
+                    # 过去那几格也可能是改过的（改完才过的），同样标一句：
+                    # 让她知道自己这一天动过，别把临时约定当成"本来就这样"。
+                    lines.append(schedule_override.OVERRIDE_NOTE)
+                prev_ov = is_ov
         lines.append("（此刻）")
         # 优先级对调：状态机才是「真·此刻」，日程那条降级成「原本的打算」。
         # 日程是早上一次写死的，状态机每小时都在动；不这样的话会出现
@@ -1597,16 +1945,26 @@ class MorningMusePlugin(Star):
                 lines.append(
                     f"- 今天排的是：{here.get('time', '')} · {self._activity_text(here)}"
                 )
+                if here.get("_ov"):
+                    lines.append(schedule_override.OVERRIDE_NOTE)
             else:
                 lines.append(f"- 现在：{cur_act}")
         elif here:
             lines.append(f"- {here.get('time')}: {self._activity_text(here)}")
+            if here.get("_ov"):
+                lines.append(schedule_override.OVERRIDE_NOTE)
         if life_state:
             lines.append(f"- 精力 {life_state.get('energy')}，心情 {mood_zh(life_state.get('mood', ''))}")
         if future:
             lines.append("（接下来）")
+            prev_ov = False
             for item in future:
                 lines.append(f"- {item.get('time')}: {self._activity_text(item)}")
+                is_ov = bool(item.get("_ov"))
+                if is_ov and not prev_ov:
+                    # 连续被改的那几格只标一次（改了整个下午到收尾时，别连刷三遍）
+                    lines.append(schedule_override.OVERRIDE_NOTE)
+                prev_ov = is_ov
         note = schedule.get("note", "").strip()
         if note:
             lines.append(f"寄语：{note}")

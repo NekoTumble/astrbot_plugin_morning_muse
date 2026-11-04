@@ -198,6 +198,47 @@
       }
     }
   },
+  "schedule_override": {
+    "description": "✏️ 临时改日程",
+    "hint": "聊天里说定了别的事（约好一起出门、说好早点睡），她自己顺手把今天还没到的安排改过来。早上那份日程原件不会被改动，只记一层补丁，随时可以撤销。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "允许她临时改安排",
+        "hint": "关掉后，她不能再改自己的安排（聊天里说定了的事只留在嘴上）。默认开。",
+        "type": "bool",
+        "default": true
+      },
+      "max_per_day": {
+        "description": "白天最多改几回",
+        "hint": "防手滑：白天这段一天最多改几回，超过就按现在的过。默认 3。",
+        "type": "int",
+        "slider": {
+          "min": 1,
+          "max": 10,
+          "step": 1
+        },
+        "default": 3
+      },
+      "max_predawn": {
+        "description": "夜里最多改几回",
+        "hint": "凌晨到今天的生成时间之前（今天这份还没出来那段时间）单独算一本账，跟白天的额度互不占用。她想把这段分成几段（先睡到七点、七点起做早饭）就要多调几次，默认给 3。",
+        "type": "int",
+        "slider": {
+          "min": 1,
+          "max": 10,
+          "step": 1
+        },
+        "default": 3
+      },
+      "sync_life": {
+        "description": "顺带把「此刻」也改过来",
+        "hint": "打开后，改完会把她此刻那一格也铺进内在状态机 —— 否则页面显示改了她人还在图书馆。默认开。",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
   "context": {
     "description": "📜 上下文参考",
     "type": "object",

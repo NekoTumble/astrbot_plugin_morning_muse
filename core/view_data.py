@@ -88,23 +88,40 @@ def before_generate_time(plugin, now: datetime.datetime) -> bool:
     return (now.hour, now.minute) < (st.hour, st.minute)
 
 
-def _items_of(data: dict, cur: int) -> list[dict]:
+def _items_of(data: dict, cur: int, origin: dict = None) -> list[dict]:
+    """把日程整理成页面用的一格一条。
+
+    `origin` 是**原件**（补丁还没盖上去的那份）：被改过的格子除了正文，还会带上
+    `activity_orig` / `place_orig`，页面据此在那个小标上点击切换「改后的 ⇄ 原本的」。
+    """
     items = []
-    for i, item in enumerate(data.get("schedule") or []):
+    src = data.get("schedule") or []
+    orig_list = (origin or {}).get("schedule") or []
+    for i, item in enumerate(src):
         if not isinstance(item, dict):
             continue
         label = str(item.get("time") or "")
         idx = PERIOD_ORDER.index(label) if label in PERIOD_ORDER else min(i, 5)
-        items.append(
-            {
-                "time": label,
-                "emoji": period_emoji(label),
-                "activity": strip_legacy_period_prefix(str(item.get("activity") or ""), label),
-                "place": place_text(item, location_zh),
-                "is_now": idx == cur,
-                "is_past": idx < cur,
-            }
-        )
+        overridden = bool(item.get("_ov"))
+        entry = {
+            "time": label,
+            "emoji": period_emoji(label),
+            "activity": strip_legacy_period_prefix(str(item.get("activity") or ""), label),
+            "place": place_text(item, location_zh),
+            "is_now": idx == cur,
+            "is_past": idx < cur,
+            # v1.5.31：聊天里临时改过的那几格给个标记（页面据此显示「XX 改的」并允许切换）
+            "overridden": overridden,
+        }
+        if overridden:
+            o = orig_list[i] if i < len(orig_list) and isinstance(orig_list[i], dict) else None
+            entry["activity_orig"] = (
+                strip_legacy_period_prefix(str(o.get("activity") or ""), label)
+                if o else entry["activity"]
+            )
+            entry["place_orig"] = place_text(o, location_zh) if o else entry["place"]
+            entry["activity_changed"] = entry["activity_orig"] != entry["activity"]
+        items.append(entry)
     return items
 
 
@@ -166,11 +183,24 @@ async def build_schedule_view(plugin, persona_id: str, now: datetime.datetime = 
                 )
         return view
 
+    # v1.5.31：聊天里临时改过的几段盖上来（只影响页面显示，原件不写）。
+    # 用 merge_all（整天全量）而不是 apply_today：过去的格子也要显示「改后的样子」，
+    # 否则到了晚上就只剩原件，看不出这一天动过。原件单独留着给页面做切换。
+    # 局部 import —— schedule_override 反过来要用本模块的 PERIOD_ORDER/period_index_of。
+    origin = data
+    try:
+        from .schedule_override import load as _load_override, merge_all as _merge_all
+
+        _ov = await _load_override(plugin, persona_id, today)
+        data = _merge_all(data, _ov) or data
+    except Exception:
+        pass
+
     return {
         "exists": True,
         "today": today.isoformat(),
         "current_index": cur,
-        "items": _items_of(data, cur),
+        "items": _items_of(data, cur, origin=origin),
         "outfit": str(data.get("outfit") or ""),
         "outfit_style": str(data.get("outfit_style") or ""),
         "note": str(data.get("note") or ""),

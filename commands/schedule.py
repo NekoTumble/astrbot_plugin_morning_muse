@@ -69,7 +69,8 @@ class ScheduleCommands:
             recent = await self.get_recent_messages(event) if self.get_recent_messages else None
             schedule = await self.generator.generate(persona_id, self.dynamic_styles, recent_messages=recent)
         if schedule:
-            return self._format_schedule(schedule)
+            schedule = await self._with_overrides(schedule, persona_id, today)
+            return self._format_schedule(schedule, persona=persona_id)
         return "今天还没有日程安排哦。"
 
     async def cmd_regenerate(self, message, event):
@@ -152,7 +153,23 @@ class ScheduleCommands:
         """这一段的地点文字（给 /查看日程 用）。实现在 core/schedule_text.py。"""
         return place_text(item, location_zh)
 
-    def _format_schedule(self, data: dict) -> str:
+    async def _with_overrides(self, data: dict, persona_id: str, today) -> dict:
+        """把今天临时改过的那几段盖到原件上（只影响这一次显示，原件一个字节都不写）。
+
+        用 `merge_all`（整天全量）而不是「此刻之后」：已经过去的格子如果被改过，
+        `/查看日程` 也该显示改后的样子并标「（XX 改过）」，否则事后再看就分不清了。
+        凌晨临时格不参与：它是「今天这份还没生成」时的东西，没日程也就没得盖。
+        """
+        try:
+            from ..core import schedule_override
+
+            ov = await schedule_override.load(self.plugin, persona_id, today)
+            merged = schedule_override.merge_all(data, ov)
+            return merged or data
+        except Exception:
+            return data
+
+    def _format_schedule(self, data: dict, persona: str = "") -> str:
         lines = []
         lines.append("🌅 今日日程")
         lines.append("")
@@ -172,7 +189,9 @@ class ScheduleCommands:
                     emoji = self._get_time_emoji(time)
                     place = self._place_text(item)
                     head = f"{emoji} {time}" + (f" · {place}" if place else "")
-                    lines.append(f"{head} - {activity}")
+                    # v1.5.31：这几格是聊天里临时改的，标一下；纯显示，不影响任何逻辑
+                    tail = f"（{persona} 改过）" if (item.get("_ov") and persona) else ""
+                    lines.append(f"{head} - {activity}{tail}")
                 else:
                     lines.append(f"⏰ {item}")
         elif isinstance(schedule, str):

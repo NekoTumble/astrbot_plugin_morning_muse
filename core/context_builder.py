@@ -31,6 +31,21 @@ _ACTIVITY_RULE_BLOCK = (
     "- 天气可以写，但别把「时段＋天气」捆成一句引子；直接从这一格发生的事说起。\n"
 )
 
+# 凌晨临时格：今天这份还没生成时，她可能刚在聊天里说定「现在就陪他看电影」。
+# 那段要**参与这次生成**（否则排出来又跟嘴上说的打架），加法和上面那两段一样：
+# 模板里没有占位符，就在「开始生成」之前补一小段。没有临时格时一个字都不加。
+_PREDAWN_MARK = "今天凌晨那一段"
+
+
+def ensure_predawn_block(text: str, block: str) -> str:
+    if not text or not block:
+        return text
+    if _PREDAWN_MARK in text:
+        return text
+    if "## 开始生成" in text:
+        return text.replace("## 开始生成", block.strip() + "\n\n## 开始生成", 1)
+    return text.rstrip() + "\n" + block
+
 class ContextBuilder:
 
     # ── 公历节日（仅非法定节假日） ──
@@ -74,6 +89,26 @@ class ContextBuilder:
         self._activity_rule_noted = False
         # J1：本地环境参考补进模板的说明也只打一次
         self._local_geo_noted = False
+        # v1.5.31：凌晨临时格带进生成这件事也只说明一次
+        self._predawn_noted = False
+
+    async def _predawn_block(self, persona_id: str) -> str:
+        """今天凌晨说定的那件事（临时格）→ 生成提示词里的一小段；没有就空串。
+
+        为什么这里不看「窗口还开着」：生成这一跳通常**正好落在**生成时间上，
+        拿时刻去夹会把自己夹掉。用不用得起交给「有没有这条记录」判断，
+        用完由 generator 在日程落盘之后删掉。
+        """
+        from .schedule_override import load as load_override, predawn_prompt_block
+
+        try:
+            today = self._get_today()
+            ov = await load_override(self.plugin, persona_id, today)
+        except Exception:
+            return ""
+        if not isinstance(ov, dict) or not isinstance(ov.get("predawn"), dict):
+            return ""
+        return predawn_prompt_block(ov)
 
     def _ensure_activity_rule(self, prompt: str) -> str:
         """模板里没有「activity 开头别报时段」这条时，替它补上（H1 · v1.5.29）。
@@ -668,6 +703,20 @@ class ContextBuilder:
         # H1（v1.5.29）：把「别在正文开头自报时段和天气」这条兜上来。
         # 见 _ensure_activity_rule 的说明——模板是用户自己的，不能被覆盖。
         prompt = self._ensure_activity_rule(prompt)
+
+        # 凌晨临时格：有（今天这份还没生成时她刚说定的那件事）就补一段参考。
+        # 没有就一个字都不加，生成结果与没这功能时完全一致。
+        try:
+            predawn_block = await self._predawn_block(persona_id)
+            if predawn_block:
+                prompt = ensure_predawn_block(prompt, predawn_block)
+                if not self._predawn_noted:
+                    self._predawn_noted = True
+                    logger.info(
+                        "[晨光心语] 🌙 今天凌晨说定的事已带进这次生成（补在「开始生成」之前）"
+                    )
+        except Exception as e:
+            logger.debug(f"[晨光心语] 凌晨临时格写入生成上下文失败（忽略）: {e}")
 
         return {
             "prompt": prompt,
