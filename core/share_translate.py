@@ -358,6 +358,21 @@ async def run_once(plugin, persona_ids, batch: int = DEFAULT_BATCH) -> dict:
     return stats
 
 
+def interval_minutes(plugin) -> int:
+    """检查间隔（分钟）。新配置读 `interval_minutes`；老配置（每天几次）自动折算。"""
+    try:
+        m = int(plugin.get_config("share_translate.interval_minutes", 0) or 0)
+    except Exception:
+        m = 0
+    if m <= 0:
+        try:
+            checks = int(plugin.get_config("share_translate.checks_per_day", 0) or 0)
+        except Exception:
+            checks = 0
+        m = int(1440 / checks) if checks > 0 else 360
+    return max(1, m)
+
+
 def status(plugin, persona_id: str = "") -> dict:
     """页面用：该人格的条数 / 今日新增 / 上次检查。"""
     cache = load(plugin)

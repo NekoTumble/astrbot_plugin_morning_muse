@@ -369,15 +369,16 @@ class MorningMusePlugin(Star):
 
             # 分享预翻译心跳：每天检查几次，只翻新增（不阻塞聊天）
             try:
-                if self.get_config("share_translate.enabled", True):
-                    _checks = int(self.get_config("share_translate.checks_per_day", 4) or 0)
-                else:
-                    _checks = 0
+                _on = bool(self.get_config("share_translate.enabled", True))
             except Exception:
-                _checks = 4
-            if _checks > 0 and self.life_bridge is not None:
-                self._share_zh_task = asyncio.create_task(self._share_translate_loop(_checks))
-                logger.info(f"[晨光心语] 🌐 分享预翻译已启用，每天检查 {_checks} 次")
+                _on = True
+            _minutes = share_translate.interval_minutes(self) if _on else 0
+            if _minutes > 0 and self.life_bridge is not None:
+                self._share_zh_task = asyncio.create_task(self._share_translate_loop(_minutes))
+                logger.info(
+                    f"[晨光心语] 🌐 分享预翻译已启用，每 {_minutes} 分钟检查一次"
+                    f"（约每天 {max(1, round(1440 / _minutes))} 次）"
+                )
                 logger.info(f"[晨光心语] 🫀 内在状态机已启用，每 {tick_minutes} 分钟推进一次")
             elif life_enabled and self.life_bridge is not None:
                 # ★ 防「静默停摆」：填 0 = 只在写日程时推进一次（设计如此）；填**负数** = 等同关闭。
@@ -486,13 +487,13 @@ class MorningMusePlugin(Star):
             except Exception as e:
                 logger.debug(f"[晨光心语] {pid} 账本维护跳过: {e}")
 
-    async def _share_translate_loop(self, checks_per_day: int):
+    async def _share_translate_loop(self, interval_minutes: int):
         """分享预翻译心跳：每天检查几次，只在有新增时才调模型。
 
         为什么不在聊天里实时翻：那会让每轮多一次模型调用、明显变慢。
         这里改成空闲时批量翻、落盘缓存，运行时只查表。
         """
-        interval = max(300, int(86400 / max(1, checks_per_day)))
+        interval = max(60, int(interval_minutes) * 60)
         await asyncio.sleep(60)          # 启动后先让别的活干完
         while True:
             left = 0

@@ -91,11 +91,11 @@
         "type": "bool",
         "default": true
       },
-      "checks_per_day": {
-        "description": "每天检查几次",
-        "hint": "只在有新增时才真调模型；填 0 = 不检查。",
+      "interval_minutes": {
+        "description": "每隔多少分钟检查一次",
+        "hint": "5~1440 分钟。填 60 = 每小时一次；填 360 = 每 6 小时（默认）；填 1440 = 每天一次。只在有新增时才真调模型。",
         "type": "int",
-        "default": 4
+        "default": 360
       },
       "batch_size": {
         "description": "每次最多翻几条",
