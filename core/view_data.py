@@ -299,7 +299,8 @@ async def collect_status(plugin, persona_id: str) -> dict:
                 from . import share_translate as _st
 
                 _shares = [
-                    {**s, "content": _st.zh_of(plugin, str(s.get("content") or "")) or s.get("content")}
+                    {**s, "content": _st.zh_of(plugin, str(s.get("content") or ""), persona_id)
+                               or s.get("content")}
                     for s in _shares
                 ]
             except Exception:
@@ -553,13 +554,11 @@ async def build_share_translate_card(plugin, persona_id: str) -> dict:
     except Exception:
         return {"total": 0, "today_new": 0, "last_at": "", "samples": []}
 
-    stat = st.status(plugin)
+    stat = st.status(plugin, persona_id)
     samples = []
     try:
-        cache = st.load(plugin)
         for t in st.raw_texts(plugin, persona_id, limit=30):
-            zh = cache.get(st.key_of(t))
-            zh = str((zh or {}).get("zh") if isinstance(zh, dict) else zh or "")
+            zh = st.zh_of(plugin, t, persona_id)
             if zh:
                 samples.append(zh)
             if len(samples) >= 3:

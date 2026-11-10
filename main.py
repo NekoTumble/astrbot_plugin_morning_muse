@@ -1723,7 +1723,7 @@ class MorningMusePlugin(Star):
                 try:
                     shares = await self.life_bridge.shareable(persona_id, limit=2)
                     share_lines = [
-                    share_translate.zh_of(self, str(s.get("content") or ""))
+                    share_translate.zh_of(self, str(s.get("content") or ""), persona_id)
                     or str(s.get("content") or "")
                     for s in shares if s.get("content")
                 ]

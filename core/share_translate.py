@@ -1,22 +1,25 @@
-"""把底座写的英文「想跟你说的事」预译成中文（缓存 + 定时补新）。
+"""把底座写的英文「想跟你说的事」预译成中文（**按人格隔离** + 定时补新）。
 
 **为什么要有这个模块**：底座（aura_life）给她生成的活动叙事是英文
-（`Found some good songs and threw them in a playlist`），而插件要把它
-塞进中文提示词、也得显示在中文页面上。实时翻译会让每轮对话都慢一拍，
-所以在**空闲时预译 + 落盘缓存**：定时检查有没有新条目，有就批量翻一批，
-运行时只查缓存（命中就用中文，没命中就退回英文原文，绝不阻塞）。
+（`Found some good songs and threw them in a playlist`），而插件要把它塞进中文提示词、
+也得显示在中文页面上。实时翻译会让每轮对话慢一拍，所以**空闲时预译 + 落盘缓存**：
+定时检查新增，有就批量翻一批；运行时只查缓存（命中用中文，没命中退回英文原文，绝不阻塞）。
 
-**翻译内容有质量**：这些句子不是随机模板，是模型为她那次具体活动写的，
-还过了 `share_worthy` 与「她愿不愿意讲」两道判定 —— 所以值得保住细节。
+**为什么按人格隔离**（2026-11-10 改）：同一句英文，两个人的语气本来不同。
+缓存键从「句子哈希」改成「人格 + 句子哈希」，翻译时把**人格名和她说话的风格**一起给模型，
+并要求用第一人称 / 省略主语（不用「她」）—— 这样小红书那 116 句共用句子也会各写一份。
 
 缓存文件：`<plugin_data>/share_zh.json`
-    { "<sha1 前16位>": {"zh": "淘到几首不错的歌，顺手扔进一个歌单", "ts": "2026-11-10T20:55:03"} }
+    { "<sha1(人格|句子) 前16位>": {"zh": "…", "ts": "…", "pid": "小夜"} }
+
+旧版（不分人格）的键没有 `pid` 字段：仍然作为**兜底**使用（新译文没到之前先顶着），
+一旦该人格自己的译文到位就会被优先取用。
 
 对外接口：
-- `zh_of(plugin, text)`     → 缓存里的中文；没有返回 ""
-- `pending_texts(...)`      → 还没翻的原文（去重、按新到旧）
-- `run_once(plugin, pids)`  → 跑一轮：查新增 → 翻 → 存缓存，返回统计
-- `status(plugin)`          → 给页面/命令看的状态（总条数 / 今日新增 / 上次检查）
+- `zh_of(plugin, text, persona_id)` → 该人格的中文（没有则退回旧版共用译文，再没有返回 ""）
+- `pending_items(plugin, pids)`    → [(人格, 原文)]，只列还没翻的
+- `run_once(plugin, pids)`         → 跑一轮：查新增 → 按人格分组翻 → 存缓存
+- `status(plugin, persona_id)`     → 给页面看的状态（该人格条数 / 今日新增 / 上次检查）
 """
 
 from __future__ import annotations
@@ -38,10 +41,17 @@ MAX_SCAN = 600              # 一轮最多扫多少条待翻（首次回填靠�
 MAX_TEXT = 300              # 单条超长就截断（翻译用不着全文）
 
 
-# ── 缓存读写 ────────────────────────────────────────────────────────
+# ── 键与缓存 ────────────────────────────────────────────────────────
 
 
-def key_of(text: str) -> str:
+def key_of(persona_id: str, text: str) -> str:
+    """人格 + 句子 → 缓存键（同句子在不同人格下是两条）。"""
+    raw = f"{str(persona_id or '').strip()}\x00{str(text or '').strip()}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def legacy_key_of(text: str) -> str:
+    """旧版（不分人格）的键，只用来兜底。"""
     return hashlib.sha1(str(text or "").strip().encode("utf-8")).hexdigest()[:16]
 
 
@@ -54,6 +64,9 @@ def _cache_path(plugin) -> Path | None:
 
 
 def load(plugin) -> dict:
+    cached = getattr(plugin, "_share_zh", None)
+    if isinstance(cached, dict):
+        return cached
     path = _cache_path(plugin)
     if path is None or not path.exists():
         return {}
@@ -76,21 +89,29 @@ def save(plugin, cache: dict) -> bool:
             json.dumps(cache, ensure_ascii=False, indent=1)
         )
         tmp.replace(path)
+        plugin._share_zh = cache
         return True
     except Exception as e:
         logger.warning(f"[晨光心语] ⚠️ 写分享译名缓存失败: {e}")
         return False
 
 
-def zh_of(plugin, text: str) -> str:
-    """缓存里查中文；没有就空串（调用方自己决定退回原文还是占位）。"""
+def _zh_of_entry(entry) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("zh") or "")
+    return str(entry or "")          # 兼容旧格式（值直接是字符串）
+
+
+def zh_of(plugin, text: str, persona_id: str = "") -> str:
+    """该人格的中文译文；没有就退回旧版共用译文；再没有返回空串。"""
     if not text:
         return ""
-    item = (load(plugin) if not isinstance(getattr(plugin, "_share_zh", None), dict)
-            else plugin._share_zh).get(key_of(text))
-    if isinstance(item, dict):
-        return str(item.get("zh") or "")
-    return str(item or "")
+    cache = load(plugin)
+    if persona_id:
+        got = _zh_of_entry(cache.get(key_of(persona_id, text)))
+        if got:
+            return got
+    return _zh_of_entry(cache.get(legacy_key_of(text)))
 
 
 # ── 从底座库里取原文 ────────────────────────────────────────────────
@@ -135,26 +156,31 @@ def raw_texts(plugin, persona_id: str, limit: int = MAX_SCAN) -> list[str]:
     return out
 
 
-def pending_texts(plugin, persona_ids, limit: int = MAX_SCAN) -> list[str]:
+def pending_items(plugin, persona_ids, limit: int = MAX_SCAN) -> list[tuple[str, str]]:
+    """还没翻的 [(人格, 原文)]。旧版共用译文**不算**已翻 —— 要按人格重写一份。"""
     cache = load(plugin)
-    out, seen = [], set()
+    out = []
     for pid in persona_ids:
+        pid = str(pid or "").strip()
+        if not pid:
+            continue
         for t in raw_texts(plugin, pid, limit=limit):
-            k = key_of(t)
-            if k in cache or t in seen:
+            if key_of(pid, t) in cache:
                 continue
-            seen.add(t)
-            out.append(t)
+            out.append((pid, t))
     return out
 
 
 # ── 翻译 ────────────────────────────────────────────────────────────
 
-_PROMPT = """把下面这些英文句子逐条翻译成中文。
+_PROMPT = """你在替一个角色，把她今天记下的英文生活片段改写成中文。这些句子之后会给她自己看，
+她可能顺着这个由头跟你聊起来。
+
+角色：{name}{style_line}
 
 要求：
-- 一句对一句，**保持原来的意思和细节**，不要扩写、不要合并、不要加解释
-- 口语化，像一个人随口讲自己刚做过什么；不要翻译腔、不要书面语、不要敬语
+- 一句对一句，**保留原来的意思和细节**，不扩写、不合并、不加解释
+- 用她的口吻：第一人称或省略主语，**绝对不要用「她」**；口语、短句，不要翻译腔和书面语
 - 只输出一个 JSON 数组，元素是字符串，顺序与输入完全一致
 - 不要输出任何多余文字、不要 markdown 代码块
 
@@ -165,7 +191,7 @@ _PROMPT = """把下面这些英文句子逐条翻译成中文。
 def _parse_translated(text: str, want: int) -> list[str]:
     """从模型回包里抠出字符串数组（容忍 ```json 包裹和多余说明）。"""
     s = str(text or "").strip()
-    m = re.search(r"\[[\[\s\S]*\]", s)
+    m = re.search(r"\[[\s\S]*\]", s)
     if m:
         try:
             arr = json.loads(m.group(0))
@@ -175,12 +201,11 @@ def _parse_translated(text: str, want: int) -> list[str]:
                     return got[:want]
         except Exception:
             pass
-    # 退路：按行拆（每行去掉序号/引号/逗号）
     lines = []
     for raw in s.splitlines():
         line = raw.strip().rstrip(",").strip()
-        line = re.sub(r'^[\d]+[.、)]\s*', "", line)
-        line = line.strip('"“”\'「」 ')
+        line = re.sub(r"^\d+[.、)]\s*", "", line)
+        line = line.strip("\"“”'「」 ")
         if line and not line.startswith("[") and not line.startswith("]"):
             lines.append(line)
     return lines[:want]
@@ -216,32 +241,53 @@ async def _call(provider, model: str, prompt: str) -> str:
         return ""
 
 
-async def translate_texts(plugin, texts: list[str], batch: int = DEFAULT_BATCH) -> dict:
-    """翻一批，返回 {原文: 中文}。失败返回空 dict（调用方按失败处理）。"""
-    got: dict[str, str] = {}
-    if not texts:
+def _style_of(plugin, persona_id: str) -> str:
+    """该人格的风格提示词（配置里那段），没有就空串。"""
+    try:
+        return str(plugin.get_style_for_persona(persona_id) or "").strip()
+    except Exception:
+        return ""
+
+
+async def translate_items(plugin, items: list[tuple[str, str]],
+                          batch: int = DEFAULT_BATCH) -> dict:
+    """翻一批 [(人格, 原文)]，返回 {(人格, 原文): 中文}。失败返回已拿到的那部分。"""
+    got: dict[tuple[str, str], str] = {}
+    if not items:
         return got
     provider, model = await _provider(plugin)
     if provider is None:
         logger.warning("[晨光心语] ⚠️ 分享预翻译：没有可用模型，跳过（下轮再试）")
         return got
-    for i in range(0, len(texts), max(1, batch)):
-        chunk = texts[i:i + batch]
-        payload = json.dumps(chunk, ensure_ascii=False, indent=0)
-        try:
-            raw = await _call(provider, model, _PROMPT.format(payload=payload))
-        except Exception as e:
-            logger.warning(f"[晨光心语] ⚠️ 分享预翻译调用失败: {e}")
-            await asyncio.sleep(1)
-            continue
-        arr = _parse_translated(raw, len(chunk))
-        if len(arr) != len(chunk):
-            logger.warning(
-                f"[晨光心语] ⚠️ 分享预翻译条数对不上（要 {len(chunk)} 得 {len(arr)}），本批只收对得上的"
+
+    # 按人格分组：每个 prompt 只带一个人格的风格，免得语气串味
+    grouped: dict[str, list[str]] = {}
+    for pid, text in items:
+        grouped.setdefault(pid, []).append(text)
+
+    for pid, texts in grouped.items():
+        style = _style_of(plugin, pid)
+        style_line = f"\n她的说话风格：{style}" if style else ""
+        for i in range(0, len(texts), max(1, batch)):
+            chunk = texts[i:i + batch]
+            prompt = _PROMPT.format(
+                name=pid, style_line=style_line,
+                payload=json.dumps(chunk, ensure_ascii=False, indent=0),
             )
-        for src, zh in zip(chunk, arr):
-            if zh and zh.strip():
-                got[src.strip()] = zh.strip()
+            try:
+                raw = await _call(provider, model, prompt)
+            except Exception as e:
+                logger.warning(f"[晨光心语] ⚠️ 分享预翻译调用失败（{pid}）: {e}")
+                await asyncio.sleep(1)
+                continue
+            arr = _parse_translated(raw, len(chunk))
+            if len(arr) != len(chunk):
+                logger.warning(
+                    f"[晨光心语] ⚠️ 分享预翻译条数对不上（{pid}：要 {len(chunk)} 得 {len(arr)}），本批只收对得上的"
+                )
+            for src, zh in zip(chunk, arr):
+                if zh and zh.strip():
+                    got[(pid, src.strip())] = zh.strip()
     return got
 
 
@@ -251,19 +297,19 @@ async def translate_texts(plugin, texts: list[str], batch: int = DEFAULT_BATCH) 
 async def run_once(plugin, persona_ids, batch: int = DEFAULT_BATCH) -> dict:
     """跑一轮预翻译。返回 {pending, translated, failed, total}。"""
     cache = load(plugin)
-    pend = pending_texts(plugin, persona_ids)
-    stats = {"pending": len(pend), "translated": 0, "failed": False, "total": len(cache)}
-    if not pend:
+    items = pending_items(plugin, persona_ids)
+    stats = {"pending": len(items), "translated": 0, "failed": False, "total": len(cache)}
+    if not items:
         plugin._share_zh_stat = {"at": datetime.now().strftime("%H:%M"), "new": 0}
         return stats
-    got = await translate_texts(plugin, pend, batch=batch)
+    got = await translate_items(plugin, items, batch=batch)
     if not got:
         stats["failed"] = True
         plugin._share_zh_stat = {"at": datetime.now().strftime("%H:%M"), "new": 0, "failed": True}
         return stats
     now = datetime.now().isoformat(timespec="seconds")
-    for src, zh in got.items():
-        cache[key_of(src)] = {"zh": zh, "ts": now}
+    for (pid, src), zh in got.items():
+        cache[key_of(pid, src)] = {"zh": zh, "ts": now, "pid": pid}
     if save(plugin, cache):
         plugin._share_zh = cache
     stats["translated"] = len(got)
@@ -273,17 +319,23 @@ async def run_once(plugin, persona_ids, batch: int = DEFAULT_BATCH) -> dict:
     return stats
 
 
-def status(plugin) -> dict:
+def status(plugin, persona_id: str = "") -> dict:
+    """页面用：该人格的条数 / 今日新增 / 上次检查。"""
     cache = load(plugin)
     today = date.today().isoformat()
-    today_new = 0
+    pid = str(persona_id or "").strip()
+    total = today_new = 0
     for v in cache.values():
-        ts = str((v or {}).get("ts") if isinstance(v, dict) else "")
-        if ts.startswith(today):
+        if not isinstance(v, dict):
+            continue
+        if pid and str(v.get("pid") or "") != pid:
+            continue
+        total += 1
+        if str(v.get("ts") or "").startswith(today):
             today_new += 1
     last = getattr(plugin, "_share_zh_stat", None) or {}
     return {
-        "total": len(cache),
+        "total": total,
         "today_new": today_new,
         "last_at": str(last.get("at") or ""),
         "last_failed": bool(last.get("failed")),
