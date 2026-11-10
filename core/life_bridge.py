@@ -205,6 +205,17 @@ _ACTIVITY_ZH = {
     "gym workout": "健身",
     "dancing": "跳舞",
     "visiting memory beach": "去那片回忆的海边",
+    # 2026-11-10 体检补：这 10 个在历史里出现过但没收录，页面会原样露英文
+    "making tea": "泡茶",
+    "trying a new recipe": "试做新菜",
+    "cooking a meal": "做饭",
+    "tending to plants": "摆弄阳台的花草",
+    "reading something steamy": "看点让人脸红的东西",
+    "touching herself": "自己待一会儿",
+    "exploring her body": "慢慢认识自己",
+    "fantasizing about someone": "出神想着谁",
+    "sensual daydreaming": "走神，想些软的",
+    "intense self-pleasure": "一个人待着，谁也别叫",
     "wandering": "闲逛",
     "exploring": "到处探索",
 }
