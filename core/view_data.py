@@ -293,7 +293,18 @@ async def collect_status(plugin, persona_id: str) -> dict:
         # 命令侧一直靠 activity_zh() 这些翻译，页面也走同一套，别让两边口径跑偏。
         out["live_display"] = _display_of(out["live"], page_title(plugin, persona_id))
         try:
-            out["shares"] = await plugin.life_bridge.shareable(persona_id, limit=3)
+            _shares = await plugin.life_bridge.shareable(persona_id, limit=3)
+            # 有预译好的就用中文（没有再退回英文原文）
+            try:
+                from . import share_translate as _st
+
+                _shares = [
+                    {**s, "content": _st.zh_of(plugin, str(s.get("content") or "")) or s.get("content")}
+                    for s in _shares
+                ]
+            except Exception:
+                pass
+            out["shares"] = _shares
         except Exception:
             out["shares"] = []
         try:
@@ -535,6 +546,30 @@ async def build_override_card(plugin, persona_id: str, now: datetime.datetime = 
     return {"mode": "dawn", "items": items}
 
 
+async def build_share_translate_card(plugin, persona_id: str) -> dict:
+    """页面「💬 她要说的话」那张卡：预翻译状态 + 三条中文样例。"""
+    try:
+        from . import share_translate as st
+    except Exception:
+        return {"total": 0, "today_new": 0, "last_at": "", "samples": []}
+
+    stat = st.status(plugin)
+    samples = []
+    try:
+        cache = st.load(plugin)
+        for t in st.raw_texts(plugin, persona_id, limit=30):
+            zh = cache.get(st.key_of(t))
+            zh = str((zh or {}).get("zh") if isinstance(zh, dict) else zh or "")
+            if zh:
+                samples.append(zh)
+            if len(samples) >= 3:
+                break
+    except Exception:
+        pass
+    stat["samples"] = samples
+    return stat
+
+
 async def build_overview(plugin, persona_id: str = "") -> dict:
     """页面一打开要的全部东西：三块 + 人格清单 + 服务端时间。"""
     now = plugin._get_now()
@@ -578,6 +613,7 @@ async def build_overview(plugin, persona_id: str = "") -> dict:
         "personas": personas,
         "schedule": await build_schedule_view(plugin, pid, now=now),
         "override": await build_override_card(plugin, pid, now=now),
+        "share_translate": await build_share_translate_card(plugin, pid),
         "status": await collect_status(plugin, pid),
         "config": config,
     }

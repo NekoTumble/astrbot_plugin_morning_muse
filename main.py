@@ -17,7 +17,7 @@ from astrbot.core.agent.message import TextPart
 
 from .commands.debug import DebugCommands
 from .commands.schedule import PersonaCommands, ScheduleCommands
-from .core import schedule_override
+from .core import schedule_override, share_translate
 from .core.poi_client import PoiClient
 from .core.config_defaults import schema_default
 from .core.context_builder import ContextBuilder
@@ -366,6 +366,18 @@ class MorningMusePlugin(Star):
             tick_minutes = self.get_config("life_engine.tick_interval_minutes", 60)
             if life_enabled and self.life_bridge is not None and tick_minutes and tick_minutes > 0:
                 self._life_tick_task = asyncio.create_task(self._life_tick_loop(int(tick_minutes)))
+
+            # 分享预翻译心跳：每天检查几次，只翻新增（不阻塞聊天）
+            try:
+                if self.get_config("share_translate.enabled", True):
+                    _checks = int(self.get_config("share_translate.checks_per_day", 4) or 0)
+                else:
+                    _checks = 0
+            except Exception:
+                _checks = 4
+            if _checks > 0 and self.life_bridge is not None:
+                self._share_zh_task = asyncio.create_task(self._share_translate_loop(_checks))
+                logger.info(f"[晨光心语] 🌐 分享预翻译已启用，每天检查 {_checks} 次")
                 logger.info(f"[晨光心语] 🫀 内在状态机已启用，每 {tick_minutes} 分钟推进一次")
             elif life_enabled and self.life_bridge is not None:
                 # ★ 防「静默停摆」：填 0 = 只在写日程时推进一次（设计如此）；填**负数** = 等同关闭。
@@ -473,6 +485,31 @@ class MorningMusePlugin(Star):
                     )
             except Exception as e:
                 logger.debug(f"[晨光心语] {pid} 账本维护跳过: {e}")
+
+    async def _share_translate_loop(self, checks_per_day: int):
+        """分享预翻译心跳：每天检查几次，只在有新增时才调模型。
+
+        为什么不在聊天里实时翻：那会让每轮多一次模型调用、明显变慢。
+        这里改成空闲时批量翻、落盘缓存，运行时只查表。
+        """
+        interval = max(300, int(86400 / max(1, checks_per_day)))
+        await asyncio.sleep(60)          # 启动后先让别的活干完
+        while True:
+            left = 0
+            try:
+                pids = await self._get_active_persona_ids()
+                if pids:
+                    stats = await share_translate.run_once(
+                        self, list(pids),
+                        batch=int(self.get_config("share_translate.batch_size", 40) or 40),
+                    )
+                    left = max(0, int(stats.get("pending") or 0) - int(stats.get("translated") or 0))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[晨光心语] ⚠️ 分享预翻译这一轮跳过: {e}")
+            # 还有没翻完的（典型是首次回填几百条）→ 30 秒后接着追；追干净了才睡到下一次
+            await asyncio.sleep(30 if left > 0 else interval)
 
     async def _replay_today_schedule(self, persona_id: str):
         """Step 3（日程 → 状态机）：心跳里把日程**铺进**状态机的计划表。
@@ -1685,7 +1722,11 @@ class MorningMusePlugin(Star):
             if self.life_bridge is not None and self.get_config("life_engine.enabled", False):
                 try:
                     shares = await self.life_bridge.shareable(persona_id, limit=2)
-                    share_lines = [s.get("content") for s in shares if s.get("content")]
+                    share_lines = [
+                    share_translate.zh_of(self, str(s.get("content") or ""))
+                    or str(s.get("content") or "")
+                    for s in shares if s.get("content")
+                ]
                     # 交到她手上之后就标成「已分享」，免得每一轮都塞同一件事
                     for s in shares:
                         if s.get("id") is not None:

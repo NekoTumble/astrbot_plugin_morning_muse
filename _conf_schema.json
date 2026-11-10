@@ -81,6 +81,30 @@
     "type": "dict",
     "default": {}
   },
+  "share_translate": {
+    "description": "🌐 她要说的话（预译成中文）",
+    "hint": "底座给她写的「想跟你说的事」是英文。打开后插件每天检查几次，把新增的预译成中文；注入和页面都用中文版，翻过的会记住，不重复翻。只在有新增时才调模型。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "打开预翻译",
+        "type": "bool",
+        "default": true
+      },
+      "checks_per_day": {
+        "description": "每天检查几次",
+        "hint": "只在有新增时才真调模型；填 0 = 不检查。",
+        "type": "int",
+        "default": 4
+      },
+      "batch_size": {
+        "description": "每次最多翻几条",
+        "hint": "一批太大模型容易漏条，40 左右合适。",
+        "type": "int",
+        "default": 40
+      }
+    }
+  },
   "state": {
     "description": "🧠 状态记忆（让日程接得上）",
     "hint": "让日程不再是「每天重新抽签」，而是从昨天接着往下走。",

@@ -193,6 +193,17 @@
   .ovrow .ovtag{flex:0 0 auto;cursor:pointer}
   .ovrow .ovtag.ghost{cursor:default;border-style:dotted;opacity:.75}
   .ovrow .ovtag.ghost:hover{background:rgba(232,161,115,.10);border-color:rgba(232,161,115,.42);color:#e6c8ad}
+
+  /* 💬 她要说的话：预翻译状态 + 中文样例 */
+  .shr-empty{color:var(--muted);font-size:12.5px;line-height:1.8;padding:4px 0 2px}
+  .shr-stat{font-size:12.5px;color:var(--muted);line-height:1.9;padding:2px 0 6px}
+  .shr-stat b{color:#e6c8ad;font-weight:600}
+  .shr-list{margin:4px 0 0;padding:0;list-style:none}
+  .shr-list li{
+    font-size:13px;color:#ded1c6;line-height:1.75;padding:6px 10px;margin-bottom:6px;
+    border-radius:9px;background:rgba(255,226,200,.035);border:1px solid var(--line);
+    overflow-wrap:anywhere;
+  }
   .body .txt{color:#ded1c6;white-space:pre-wrap}
 
   .note{
@@ -367,6 +378,14 @@
           <div class="skeleton" style="width:45%"></div>
         </div>
       </section>
+
+      <section class="card">
+        <h2><span class="ico">💬</span>她要说的话<span class="tail" id="share-tail"></span></h2>
+        <div id="share-card">
+          <div class="skeleton" style="width:60%"></div>
+          <div class="skeleton" style="width:80%"></div>
+        </div>
+      </section>
     </div>
   </div>
 </div>
@@ -503,6 +522,30 @@
           : "") +
         tag + "</div>";
     });
+    box.innerHTML = html;
+  }
+
+  // 💬 她要说的话：预翻译状态 + 三条中文样例
+  function renderShareTrans(d) {
+    const box = $("share-card");
+    if (!box) return;
+    const st = d || {};
+    const total = Number(st.total || 0);
+    const today = Number(st.today_new || 0);
+    const tail = $("share-tail");
+    if (tail) tail.textContent = total ? "已备好 " + total + " 条" : "还没开始";
+    let html = '<div class="shr-stat">' +
+      '<b>' + esc(String(total)) + '</b> 条已译好' +
+      (today > 0 ? '　·　今天 <b>+' + esc(String(today)) + '</b>' : '　·　今天没新增') +
+      (st.last_at ? '　·　上次检查 ' + esc(String(st.last_at)) : "") +
+      "</div>";
+    const samples = st.samples || [];
+    if (samples.length) {
+      html += '<ul class="shr-list">' +
+        samples.map((t) => '<li>' + esc(t) + "</li>").join("") + "</ul>";
+    } else {
+      html += '<div class="shr-empty">还没有译好的；她说过之后这里会出现。</div>';
+    }
     box.innerHTML = html;
   }
 
@@ -707,6 +750,7 @@
     renderStatus(data.status || {});
     renderConfig(data.config || {});
     renderOverride(data.override || {});
+    renderShareTrans(data.share_translate || {});
     $("rewriteBtn").disabled = false;
   }
 
@@ -759,6 +803,7 @@
       const data = res && res.data !== undefined ? res.data : res;
       if (data && data.schedule) renderSchedule(data.schedule, (state.data || {}).config);
     if (data && data.override) renderOverride(data.override);
+    if (data && data.share_translate) renderShareTrans(data.share_translate);
       const now = new Date();
       const hh = String(now.getHours()).padStart(2, "0");
       const mm = String(now.getMinutes()).padStart(2, "0");
