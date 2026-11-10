@@ -41,7 +41,7 @@ from .proactive_store import (
     detect_chat_type,
     format_skipped_line,
 )
-from .life_bridge import activity_zh, energy_zh, location_zh, mood_zh
+from .life_bridge import activity_zh, energy_zh, goal_zh, location_zh, mood_zh
 
 # ── 急 / 缓 ──
 URGENT = "urgent"
@@ -1141,9 +1141,12 @@ class ProactiveEngine:
 
         # ① 优先记忆池（跟此刻的状态最相关的那条）
         if self.memory_bridge is not None:
+            # 检索词用**中文**：她的记忆本来就是中文写的，拿英文的想法/目标去搜容易搜偏。
+            # 中文想法直接读现翻缓存（页面翻过就是免费的）；实在翻不出来 _thought_zh 会退回原文。
+            thought_zh = await self._thought_zh(pid, state)
             query = " ".join([
-                str((state or {}).get("thought") or ""),
-                " ".join((state or {}).get("goals") or []),
+                thought_zh,
+                " ".join(goal_zh(g) for g in (state or {}).get("goals") or []),
             ]).strip()
             try:
                 items = await self.memory_bridge.retrieve(pid, query or "想起", limit=6)
@@ -1820,18 +1823,21 @@ class ProactiveEngine:
         persona_prompt = await self._persona_prompt(persona_id)
         schedule_now = await self._schedule_now(persona_id)
         max_len = max(20, _as_int(self._cfg("proactive.max_length", 120), 120))
+        # 她心里那句话先翻成中文（和页面共用一份缓存，翻不出来就用原文）
+        thought_zh = await self._thought_zh(persona_id, state)
 
         # separate 档：先单独问一次「现在要不要说」，不想说就直接收工
         mode = self._self_veto_mode()
         if mode == "separate":
             why = await self._ask_should_speak(
-                provider, model, persona_id, hit, state, persona_prompt, schedule_now
+                provider, model, persona_id, hit, state, persona_prompt, schedule_now,
+                thought_zh,
             )
             if why is not None:
                 return GenerateResult(None, True, why)
 
         prompt = self._render_prompt(
-            persona_id, hit, state, schedule_now, max_len, persona_prompt
+            persona_id, hit, state, schedule_now, max_len, persona_prompt, thought_zh
         )
         raw_text = await self._call_llm(provider, model, prompt, persona_prompt, persona_id)
         text = self._clean_output(raw_text, max_len)
@@ -1867,7 +1873,7 @@ class ProactiveEngine:
 
     async def _ask_should_speak(self, provider, model, persona_id: str, hit: TriggerHit,
                                 state: dict | None, persona_prompt: str,
-                                schedule_now: str) -> str | None:
+                                schedule_now: str, thought_zh: str = "") -> str | None:
         """separate 档专用：单独调一次小模型，**只问「现在要不要说」**。
 
         返回理由字符串 = 她决定这次不说；返回 None = 该说，继续走正常生成。
@@ -1875,7 +1881,7 @@ class ProactiveEngine:
         prompt = (
             "你现在**不是**在写消息，只是在回答一个问题：此刻要不要主动开口跟他说句话。\n\n"
             f"【你是谁】\n{persona_prompt or '（按你平时说话的口气来）'}\n\n"
-            f"【你现在的状态】\n{self._state_text(state)}\n\n"
+            f"【你现在的状态】\n{self._state_text(state, thought_zh)}\n\n"
             f"【你此刻在做什么】\n{schedule_now or '（这一刻没什么特别的安排）'}\n\n"
             f"【你最近已经说过】\n{self._recent_said_text(persona_id)}\n\n"
             f"【你最近想说、但最后没说出口的】\n{self._recent_skipped_text(persona_id)}\n\n"
@@ -1944,7 +1950,8 @@ class ProactiveEngine:
         return _extract_text(resp)
 
     def _render_prompt(self, persona_id: str, hit: TriggerHit, state: dict | None,
-                       schedule_now: str, max_len: int, persona_prompt: str) -> str:
+                       schedule_now: str, max_len: int, persona_prompt: str,
+                       thought_zh: str = "") -> str:
         template = str(self._cfg("proactive_prompt.template", "") or "").strip()
         if not template:
             template = DEFAULT_PROMPT_TEMPLATE
@@ -1952,7 +1959,7 @@ class ProactiveEngine:
         values = {
             "persona": persona_id,
             "persona_prompt": persona_prompt or "（这个人格没有单独设定，就按平时跟你说话的口气来）",
-            "state_text": self._state_text(state),
+            "state_text": self._state_text(state, thought_zh),
             "schedule_now": schedule_now or "（这一刻没什么特别的安排）",
             "recent_said": self._recent_said_text(persona_id),
             "recent_skipped": self._recent_skipped_text(persona_id),
@@ -2066,8 +2073,28 @@ class ProactiveEngine:
             lines.append(f"· {when} 起就惦记着：{detail}" if when else f"· 还惦记着：{detail}")
         return "\n".join(lines) if lines else "（没有）"
 
+    async def _thought_zh(self, persona_id: str, state: dict | None) -> str:
+        """她心里那句话的中文（现翻 + 缓存，和页面共用 `live_zh.json`）。
+
+        底座写的是英文（`Am I actually getting into this?`），而这两段提示词是中文的
+        （「【你现在的状态】…脑子里在想：…」）——露英文进去，她说话容易跟着串味。
+        翻不出来就照用原文，绝不空着。
+        """
+        raw = str((state or {}).get("thought") or "").strip()
+        if not raw:
+            return ""
+        plugin = getattr(self, "plugin", None)
+        if plugin is None:
+            return raw
+        try:
+            from . import share_translate as _st
+
+            return await _st.zh_now(plugin, raw, persona_id, "thought") or raw
+        except Exception:
+            return raw
+
     @staticmethod
-    def _state_text(state: dict | None) -> str:
+    def _state_text(state: dict | None, thought: str = "") -> str:
         if not state:
             return "（暂时读不到你此刻的状态）"
         lines = [f"精力：{state.get('energy')}"
@@ -2078,10 +2105,12 @@ class ProactiveEngine:
             lines.append(f"此刻在做：{activity_zh(state['current_activity'])}")
         if state.get("location"):
             lines.append(f"所在：{location_zh(state['location'])}")
-        if state.get("thought"):
-            lines.append(f"脑子里在想：{state['thought']}")
+        # thought 由调用方先翻好传进来；没传就用原文（英文也比没有强）
+        _th = str(thought or state.get("thought") or "").strip()
+        if _th:
+            lines.append(f"脑子里在想：{_th}")
         if state.get("goals"):
-            lines.append("惦记的事：" + "；".join(state["goals"]))
+            lines.append("惦记的事：" + "；".join(goal_zh(g) for g in state["goals"]))
         return "\n".join(lines)
 
     @staticmethod

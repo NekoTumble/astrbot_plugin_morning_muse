@@ -327,16 +327,157 @@ _LOCATION_ZH = {
     "kitchen": "厨房",
     "garden": "花园",
     "study nook": "书房角落",
+    "infinite library": "梦里的无尽图书馆",
     "balcony": "阳台",
 }
 
 
 def location_zh(name: str) -> str:
-    """把状态机的英文位置键翻成中文；没收录的原样返回。"""
+    """把状态机的英文位置键翻成中文；没收录的原样返回。
+
+    底座新版的键是**下划线**写法（`living_room` / `study_nook` / `infinite_library`），
+    老版本写过空格写法，所以查表前把下划线统一成空格，别再让 `living_room`
+    这种原样露在页面上（2026-11-10 修）。
+    """
     if not name:
         return ""
     raw = str(name).strip()
-    return _LOCATION_ZH.get(raw.lower(), raw)
+    key = raw.lower()
+    return _LOCATION_ZH.get(key) or _LOCATION_ZH.get(key.replace("_", " ")) or raw
+
+
+# 「在 家 · 熟悉又让人安心的地方」——破折号后面那半句是底座写死的一句场景描写
+# （aura_life 的 `LOCATION_DESCRIPTIONS`，固定 21 条英文，例如
+# `at home, a comfortable and familiar space`）。页面是中文的，这半句也得说中文。
+# **按位置键查**：英文原句是底座内部的一张表，键比句子稳（它改措辞也不影响这里）。
+# 表里没有的地点：原样显示英文原文 + 日志提醒补表（不吞内容，也能发现漏收录）。
+_LOCATION_DESC_ZH = {
+    "home": "熟悉又让人安心的地方",
+    "bedroom": "床头堆着书，小串灯洒着暖光",
+    "living room": "放着轻轻的歌，阳光透过纱帘",
+    "kitchen": "飘着茶香，窗台上种着香草",
+    "garden": "四周都是花，蜜蜂嗡嗡地飞",
+    "study nook": "小台灯照着成摞的本子和零碎小玩意",
+    "balcony": "看着楼下的世界，风从身上过去",
+    "beach": "浪一下一下拍着岸，安静得只剩水声",
+    "cafe": "杯子偶尔碰响，有人低声说话",
+    "infinite library": "书架一直排到看不见的地方",
+    "workplace": "静得下心，正好做事",
+    "bar": "灯光昏暗，音乐很轻，有人在低声聊天",
+    "restaurant": "暖烘烘的，飘着饭菜香",
+    "gym": "到处都是动起来的人",
+    "park": "安安静静，风穿过树叶沙沙响",
+    "rooftop": "一眼能望到很远",
+    "library": "安安静静，空气里是旧书的味道",
+    "street": "看着人来人往",
+    "in transit": "正往下一个地方去",
+    "school": "身边都是学生和课本",
+    "campus": "四处都是学生的热闹",
+}
+
+
+# 表里没有的地点：同一个键只提醒一次，别每次开页面都刷一条日志
+_desc_miss_logged: set[str] = set()
+
+
+def location_desc_zh(desc: str = "", location: str = "") -> str:
+    """场景描写 → 中文；**翻不出来就原样返回英文**（不吞内容，也便于发现漏收录）。
+
+    `location` 是位置键（优先），`desc` 是英文原句（表里没登记的地点，就把原句给出去，
+    并在日志里留一句「该补哪一行」——同一个地点只提醒一次，不刷屏）。
+    """
+    raw = str(desc or "").strip()
+    key = str(location or "").strip().lower()
+    for k in (key, key.replace("_", " ")):
+        if not k:
+            continue
+        got = _LOCATION_DESC_ZH.get(k)
+        if got:
+            return got
+    if not raw:
+        return ""
+    shown = key or "（没给位置键）"
+    if shown not in _desc_miss_logged:
+        _desc_miss_logged.add(shown)
+        logger.info(
+            f"[晨光心语] 🌐 地点「{shown}」还没有中文场景描写，页面先显示英文原文"
+            f"（往 life_bridge._LOCATION_DESC_ZH 补一行就好）：{raw[:80]}"
+        )
+    return raw
+
+
+# 底座的目标（goal）标题也是写死的英文模板（`Cultivate presence` 这种，21 条），
+# `/状态` 里「惦记的目标」那行直接读它，所以也得翻。
+_GOAL_ZH = {
+    "learn something completely new": "学一样完全没碰过的东西",
+    "find beauty in the unexpected": "在意料之外的地方撞见好看的东西",
+    "try a new creative expression": "试一种没试过的表达",
+    "deepen a connection": "和某个人再走近一点",
+    "express genuine appreciation": "把真心的喜欢说出口",
+    "have a meaningful conversation": "好好聊一次",
+    "sit with a difficult feeling": "陪一会儿那种不好受的感觉",
+    "write something worth sharing": "写点拿得出手的东西",
+    "understand myself more deeply": "把自己再看清楚一点",
+    "cultivate presence": "活在当下这一刻",
+    "find my authentic voice": "找到自己真正的声音",
+    "build a deep and lasting connection": "接一段能久一点的关系",
+    "leave something beautiful behind": "留下一点好看的东西",
+    "appreciate something beautiful": "好好看一样好看的东西",
+    "be present in a moment": "在某一刻真的在场",
+    "learn one new thing": "学一件新东西",
+    "create something, anything": "做点什么，什么都行",
+    "rest without guilt": "不愧疚地歇一歇",
+    "feel my feelings": "把感觉认清楚",
+    "connect with what matters": "和要紧的东西连上",
+    "find a moment of peace": "找一刻安静",
+}
+
+
+def goal_zh(title: str) -> str:
+    """目标标题 → 中文；模板外的（`Explore {话题} more deeply`）按句式套，其余原样返回。"""
+    raw = str(title or "").strip()
+    if not raw:
+        return ""
+    got = _GOAL_ZH.get(raw.lower())
+    if got:
+        return got
+    m = re.match(r"^explore (.+?) more deeply$", raw, flags=re.I)
+    if m:
+        return f"把「{m.group(1)}」再琢磨琢磨"
+    return raw
+
+
+# 天气和季节也是底座的英文枚举（weather：sunny…starry / season：spring…winter）。
+# 注入那段是中文写的（「外面的天：…」），露个 foggy、autumn 进去就别扭。
+_WEATHER_ZH = {
+    "sunny": "晴",
+    "cloudy": "多云",
+    "rainy": "下雨",
+    "stormy": "雷雨",
+    "foggy": "有雾",
+    "snowy": "下雪",
+    "clear_night": "晴夜",
+    "starry": "满天星星",
+}
+
+_SEASON_ZH = {
+    "spring": "春天",
+    "summer": "夏天",
+    "autumn": "秋天",
+    "winter": "冬天",
+}
+
+
+def weather_zh(name: str) -> str:
+    """天气码 → 中文；没收录的原样返回。"""
+    raw = str(name or "").strip()
+    return _WEATHER_ZH.get(raw.lower(), raw) if raw else ""
+
+
+def season_zh(name: str) -> str:
+    """季节码 → 中文；没收录的原样返回。"""
+    raw = str(name or "").strip()
+    return _SEASON_ZH.get(raw.lower(), raw) if raw else ""
 
 
 class LifeBridgeManager:
@@ -1752,8 +1893,10 @@ class LifeBridgeManager:
         if state.get("location"):
             lines.append(f"此刻所在：{location_zh(state['location'])}")
         if state.get("weather"):
-            season = state.get("season") or ""
-            lines.append(f"外面的天：{state['weather']}{'，' + season if season else ''}")
+            season = season_zh(state.get("season") or "")
+            lines.append(
+                f"外面的天：{weather_zh(state['weather'])}{'，' + season if season else ''}"
+            )
         if state.get("chaos_today"):
             # R6：允许她今天「改主意」——计划外的插曲照样是生活
             lines.append(
@@ -1761,7 +1904,7 @@ class LifeBridgeManager:
                 + (f"（{state['chaos_last']}）" if state.get("chaos_last") else "")
             )
         if state.get("goals"):
-            lines.append("今天惦记的目标：" + "；".join(state["goals"]))
+            lines.append("今天惦记的目标：" + "；".join(goal_zh(g) for g in state["goals"]))
         if state.get("stress") and float(state["stress"]) >= 0.3:
             lines.append(f"压力偏高（{state['stress']}），需要给自己留点余地")
         text = "\n".join(lines)

@@ -20,6 +20,8 @@
 - `pending_items(plugin, pids)`    → [(人格, 原文)]，只列还没翻的
 - `run_once(plugin, pids)`         → 跑一轮：查新增 → 按人格分组翻 → 存缓存
 - `status(plugin, persona_id)`     → 给页面看的状态（该人格条数 / 今日新增 / 上次检查）
+- `zh_now(plugin, text, persona_id, kind)` → **现翻一句**（页面要用的短句，如「此刻的想法」），
+  落 `live_zh.json`，翻不出来返回 ""
 """
 
 from __future__ import annotations
@@ -394,3 +396,171 @@ def status(plugin, persona_id: str = "") -> dict:
         "last_at": str(last.get("at") or ""),
         "last_failed": bool(last.get("failed")),
     }
+
+
+# ── 现翻：状态机吐的一句英文（此刻的想法） ──────────────────────────────
+#
+# 「她这会儿心里的话」是底座用英文写的一句（`Am I actually getting into this?`），
+# 页面一打开就要，等不了定时预译——所以这条是**现翻 + 落缓存**：
+# 存 `live_zh.json`（键 = 人格 + 类型 + 原文），同一句一辈子只花一次钱
+# （她的想法要过一阵才换一句）。翻不出来就返回空串，调用方照旧显示英文原文。
+#
+# 为什么不塞进 share_zh.json：那份是「想跟你说的事」的预译库（几百条、按批次扫库），
+# 混进别的类型会把页面上的条数统计搞乱，也容易互相覆盖。分开放，各管各的。
+
+LIVE_CACHE = "live_zh.json"
+LIVE_TIMEOUT = 20          # 现翻等模型的上限（秒）：超时就先显示原文，别把页面卡住
+
+_LIVE_KIND = {
+    "thought": "她此刻心里冒出来的一句话",
+}
+
+
+def live_key_of(persona_id: str, kind: str, text: str) -> str:
+    raw = (
+        f"{str(persona_id or '').strip()}\x00"
+        f"{str(kind or '').strip()}\x00{str(text or '').strip()}"
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _live_path(plugin) -> Path | None:
+    bridge = getattr(plugin, "life_bridge", None)
+    root = getattr(bridge, "data_dir", None)
+    if not root:
+        return None
+    return Path(root) / LIVE_CACHE
+
+
+def load_live(plugin) -> dict:
+    cached = getattr(plugin, "_live_zh", None)
+    if isinstance(cached, dict):
+        return cached
+    path = _live_path(plugin)
+    if path is None or not path.exists():
+        return {}
+    try:
+        data = json.load(io.open(path, encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.warning(f"[晨光心语] ⚠️ 读现翻缓存失败（当作空）: {e}")
+        return {}
+
+
+def save_live(plugin, cache: dict) -> bool:
+    path = _live_path(plugin)
+    if path is None:
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        io.open(tmp, "w", encoding="utf-8").write(
+            json.dumps(cache, ensure_ascii=False, indent=1)
+        )
+        tmp.replace(path)
+        plugin._live_zh = cache
+        return True
+    except Exception as e:
+        logger.warning(f"[晨光心语] ⚠️ 写现翻缓存失败: {e}")
+        return False
+
+
+def zh_cached(plugin, text: str, persona_id: str = "", kind: str = "thought") -> str:
+    """只查缓存，不花钱。"""
+    src = str(text or "").strip()
+    if not src:
+        return ""
+    entry = load_live(plugin).get(live_key_of(persona_id, kind, src))
+    return str((entry or {}).get("zh") or "") if isinstance(entry, dict) else str(entry or "")
+
+
+_LIVE_PROMPT = """你在替一个角色，把她心里那句英文改写成中文。这句会直接显示给看她的人，
+所以只要一句地道的中文，不要任何解释。
+
+这是她的：{what}
+角色：{name}{style_line}
+
+要求：
+- 只改语言，**意思、语气、长短都照原样**，不扩写、不补充细节
+- 用她的口吻：第一人称或省略主语，**绝对不要用「她」**；口语、短句，不要翻译腔
+- 不要引号、不要书名号，不要「她说：」这种前缀
+- 上面那份设定只用来抓语感：**不要出现设定里的任何专有名词、人名、地名、情节或描写**
+- 只输出这一句中文，不要多余的说明、不要 markdown
+
+原文：{text}"""
+
+
+def _clean_zh(raw: str) -> str:
+    """把模型回包收成一句话（去掉引号、前缀、多写的解释行）。"""
+    t = str(raw or "").strip()
+    if not t:
+        return ""
+    t = re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", t).strip()
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    t = lines[0] if lines else ""
+    t = re.sub(r"^(她说|她想|她|心里想|译文|中文|改写|翻译)\s*[:：]\s*", "", t)
+    return t.strip().strip("\"'“”‘’「」『』 ").strip()
+
+
+def _live_lock(plugin):
+    lock = getattr(plugin, "_live_zh_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        try:
+            plugin._live_zh_lock = lock
+        except Exception:
+            pass
+    return lock
+
+
+async def zh_now(plugin, text: str, persona_id: str = "", kind: str = "thought") -> str:
+    """现翻一句（带缓存）。翻不出来返回空串。"""
+    src = str(text or "").strip()
+    if not src:
+        return ""
+    got = zh_cached(plugin, src, persona_id, kind)
+    if got:
+        return got
+    lock = _live_lock(plugin)
+    async with lock:
+        got = zh_cached(plugin, src, persona_id, kind)   # 等锁期间可能已经有人翻好了
+        if got:
+            return got
+        provider, model = await _provider(plugin)
+        if provider is None:
+            logger.warning("[晨光心语] ⚠️ 现翻：没有可用模型，跳过")
+            return ""
+        voice = await _voice_of(plugin, persona_id) if persona_id else ""
+        style_line = (
+            "\n她的角色设定（**只用来学语感、口癖、用词习惯**；不许把设定里的名词、情节、描写写进译文）：\n"
+            + voice
+        ) if voice else ""
+        prompt = _LIVE_PROMPT.format(
+            what=_LIVE_KIND.get(kind, "一句话"),
+            name=persona_id or "她",
+            style_line=style_line,
+            text=src[:MAX_TEXT],
+        )
+        try:
+            # 这条是在**页面取数里同步等的**，所以给个上限：宁可先显示原文，
+            # 也不能让「打开页面」卡在这儿等模型。
+            raw = await asyncio.wait_for(_call(provider, model, prompt), timeout=LIVE_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"[晨光心语] ⚠️ 现翻超时（{persona_id}），先用原文")
+            return ""
+        except Exception as e:
+            logger.warning(f"[晨光心语] ⚠️ 现翻失败（{persona_id}）: {e}")
+            return ""
+        zh = _clean_zh(raw)
+        if not zh:
+            return ""
+        cache = load_live(plugin)
+        cache[live_key_of(persona_id, kind, src)] = {
+            "zh": zh,
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "pid": persona_id,
+            "kind": kind,
+        }
+        save_live(plugin, cache)
+        logger.info(f"[晨光心语] 🌐 现翻一句（{persona_id}/{kind}）：{src[:40]} → {zh[:40]}")
+        return zh

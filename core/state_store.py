@@ -295,9 +295,17 @@ class StateStore:
             return ""
         s = cls.normalize(state, get_today())
         mood = s["mood"]
+        # 心情码是底座的英文（content / blue / raw…），这里顺手翻成中文——
+        # 这段话既要显示在页面上，也会整段填进中文提示词，露个 content 进去不像话。
+        try:
+            from .life_bridge import mood_zh as _mood_zh
+
+            mood_label = _mood_zh(mood["label"]) or mood["label"]
+        except Exception:
+            mood_label = mood["label"]
         lines = [
             f"精力：{s['energy']:.2f}（0=透支，1=满格）",
-            f"心情：{mood['label']}（愉悦度 {mood['valence']:+.1f}，强度 {mood['intensity']:.1f}）",
+            f"心情：{mood_label}（愉悦度 {mood['valence']:+.1f}，强度 {mood['intensity']:.1f}）",
         ]
         if s["focus"]:
             lines.append(f"当时最挂心的事：{s['focus']}")

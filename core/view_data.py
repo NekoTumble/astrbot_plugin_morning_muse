@@ -22,9 +22,12 @@ from astrbot.api import logger
 from .life_bridge import (
     activity_zh,
     energy_zh,
+    goal_zh,
+    location_desc_zh,
     location_zh,
     mood_zh,
     page_title,
+    season_zh,
 )
 from .life_bridge import period_index_of as _period_index_of
 from .schedule_text import period_emoji, place_text, strip_legacy_period_prefix
@@ -252,9 +255,16 @@ def _display_of(live, title: str = "") -> dict:
         "mood": mood_zh(live.get("mood", "")),
         "mood_intensity": live.get("mood_intensity"),
         "thought": live.get("thought", ""),
-        "goals": live.get("goals") or [],
-        "season": live.get("season", ""),
-        "location_desc": live.get("location_desc", ""),
+        # 目标是底座的英文模板（Cultivate presence…），季节是编码（autumn）：
+        # 这里给中文版，页面/命令都别再各自翻一遍。
+        "goals": [goal_zh(g) for g in (live.get("goals") or []) if str(g).strip()],
+        "season": season_zh(live.get("season", "")),
+        # 场景描写（「在 家 · 熟悉又让人安心的地方」的后半句）：底座给的是英文，
+        # 这里按位置键换成中文；**表里没有的地点就把英文原句照原样给出去**（不吞内容，
+        # 同时 life_bridge 会在日志里留一句提醒补表）。
+        "location_desc": location_desc_zh(
+            live.get("location_desc", ""), live.get("location", "")
+        ),
         "chaos_today": live.get("chaos_today", 0),
     }
 
@@ -292,6 +302,19 @@ async def collect_status(plugin, persona_id: str) -> dict:
         # 给页面用的中文版：状态机吐的是 park / content / resting 这种码，
         # 命令侧一直靠 activity_zh() 这些翻译，页面也走同一套，别让两边口径跑偏。
         out["live_display"] = _display_of(out["live"], page_title(plugin, persona_id))
+        # 「她这会儿心里的话」是底座用英文写的一句（`Am I actually getting into this?`），
+        # 页面是中文的，这里翻一下。译文落 live_zh.json 缓存，同一句一辈子只花一次钱；
+        # 翻不出来就照旧显示英文原文（不空着）。
+        _thought = str((out["live_display"] or {}).get("thought") or "")
+        if _thought:
+            try:
+                from . import share_translate as _st_thought
+
+                _zh = await _st_thought.zh_now(plugin, _thought, persona_id, kind="thought")
+                if _zh:
+                    out["live_display"]["thought"] = _zh
+            except Exception as e:
+                logger.debug(f"[晨光心语] 想法翻译失败（先用原文）: {e}")
         try:
             _shares = await plugin.life_bridge.shareable(persona_id, limit=3)
             # 有预译好的就用中文（没有再退回英文原文）
@@ -692,9 +715,10 @@ def render_status_text(data: dict) -> str:
         if live.get("location"):
             lines.append(f"所在：{location_zh(live['location'])}")
         if live.get("goals"):
-            lines.append("惦记的目标：" + "；".join(live["goals"]))
-        if live.get("thought"):
-            lines.append(f"脑子里在想：{live['thought']}")
+            lines.append("惦记的目标：" + "；".join(goal_zh(g) for g in live["goals"]))
+        _thought = (data.get("live_display") or {}).get("thought") or live.get("thought")
+        if _thought:
+            lines.append(f"脑子里在想：{_thought}")
         shares = data.get("shares") or []
         if shares:
             lines.append("最近想说的：")
