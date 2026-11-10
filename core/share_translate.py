@@ -36,6 +36,7 @@ from pathlib import Path
 from astrbot.api import logger
 
 CACHE_NAME = "share_zh.json"
+CACHE_VER = 2              # 翻译提示词变了就 +1，旧译文会被当成"待翻"重写
 DEFAULT_BATCH = 40          # 一次发给模型多少条（别太大，回包好解析）
 MAX_SCAN = 600              # 一轮最多扫多少条待翻（首次回填靠循环补完）
 MAX_TEXT = 300              # 单条超长就截断（翻译用不着全文）
@@ -165,8 +166,11 @@ def pending_items(plugin, persona_ids, limit: int = MAX_SCAN) -> list[tuple[str,
         if not pid:
             continue
         for t in raw_texts(plugin, pid, limit=limit):
-            if key_of(pid, t) in cache:
+            got = cache.get(key_of(pid, t))
+            if isinstance(got, dict) and int(got.get("ver") or 1) >= CACHE_VER:
                 continue
+            if got and not isinstance(got, dict):
+                continue        # 旧格式（值直接是字符串）也重写
             out.append((pid, t))
     return out
 
@@ -241,12 +245,41 @@ async def _call(provider, model: str, prompt: str) -> str:
         return ""
 
 
-def _style_of(plugin, persona_id: str) -> str:
-    """该人格的风格提示词（配置里那段），没有就空串。"""
-    try:
-        return str(plugin.get_style_for_persona(persona_id) or "").strip()
-    except Exception:
-        return ""
+MAX_PERSONA = 1200          # 人格提示词截断长度（够抓语气，别把整份塞进去）
+
+
+async def _voice_of(plugin, persona_id: str) -> str:
+    """该人格的"语气参考"。
+
+    优先用 AstrBot 里那份**完整人格提示词**（`context_builder._get_persona_prompt`）——
+    它才真正写了这个人怎么说话；拿不到再退回配置里那段短的风格字段。
+    结果按人格缓存，一次翻译只取一次。
+    """
+    cache = getattr(plugin, "_persona_prompt_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        try:
+            plugin._persona_prompt_cache = cache
+        except Exception:
+            pass
+    if persona_id in cache:
+        return cache[persona_id]
+    text = ""
+    builder = getattr(plugin, "context_builder", None)
+    fn = getattr(builder, "_get_persona_prompt", None)
+    if fn is not None:
+        try:
+            text = str(await fn(persona_id) or "").strip()
+        except Exception:
+            text = ""
+    if not text:
+        try:
+            text = str(plugin.get_style_for_persona(persona_id) or "").strip()
+        except Exception:
+            text = ""
+    text = text[:MAX_PERSONA]
+    cache[persona_id] = text
+    return text
 
 
 async def translate_items(plugin, items: list[tuple[str, str]],
@@ -266,8 +299,11 @@ async def translate_items(plugin, items: list[tuple[str, str]],
         grouped.setdefault(pid, []).append(text)
 
     for pid, texts in grouped.items():
-        style = _style_of(plugin, pid)
-        style_line = f"\n她的说话风格：{style}" if style else ""
+        voice = await _voice_of(plugin, pid)
+        style_line = (
+            "\n她的角色设定（**只学语气、口癖和用词习惯**，不要照抄设定里的任何情节或描写）：\n"
+            + voice
+        ) if voice else ""
         for i in range(0, len(texts), max(1, batch)):
             chunk = texts[i:i + batch]
             prompt = _PROMPT.format(
@@ -309,7 +345,7 @@ async def run_once(plugin, persona_ids, batch: int = DEFAULT_BATCH) -> dict:
         return stats
     now = datetime.now().isoformat(timespec="seconds")
     for (pid, src), zh in got.items():
-        cache[key_of(pid, src)] = {"zh": zh, "ts": now, "pid": pid}
+        cache[key_of(pid, src)] = {"zh": zh, "ts": now, "pid": pid, "ver": CACHE_VER}
     if save(plugin, cache):
         plugin._share_zh = cache
     stats["translated"] = len(got)
