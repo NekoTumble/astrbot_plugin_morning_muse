@@ -26,6 +26,7 @@ from .core.generator import ScheduleGenerator
 from .core.life_bridge import (
     LifeBridgeManager,
     activity_zh,
+    inject_title,
     # v1.5.31 修：_format_life_only 里用了 location_zh 却没导入 —— v1.5.30 起
     # 夜里那段「[此刻]」注入一直在抛 NameError（她夜里收不到「自己在哪」）。
     # 这条是静态检查抓出来的，两套离线自检都因为给桩而漏掉了它。
@@ -1694,7 +1695,9 @@ class MorningMusePlugin(Star):
                 except Exception:
                     share_lines = []
 
-            injection = self._format_for_injection(schedule, life_state=life_state)
+            injection = self._format_for_injection(
+                schedule, life_state=life_state, title=inject_title(self, persona_id)
+            )
             if share_lines:
                 injection += ("\n（她今天有件想跟你说的事，合适的时候可以自然提起："
                               + "；".join(share_lines) + "）")
@@ -1720,7 +1723,10 @@ class MorningMusePlugin(Star):
                 interrupts = 0
             # 注意：_format_life_only 本身一个字都不改（夜里那四档语气 + 赖床/被打断都归它），
             # 凌晨临时格这一行是**在它外面**追加的。
-            text = self._format_life_only(life_state, sleeping=sleeping, interrupts=interrupts)
+            text = self._format_life_only(
+                life_state, sleeping=sleeping, interrupts=interrupts,
+                title=inject_title(self, persona_id),
+            )
             try:
                 _ovn = await schedule_override.load(self, persona_id, today)
                 if _ovn.get("predawn"):
@@ -1816,13 +1822,13 @@ class MorningMusePlugin(Star):
         return "精力挺足"
 
     def _format_life_only(self, life_state: dict, sleeping: bool = False,
-                         interrupts: int = 0) -> str:
+                         interrupts: int = 0, title: str = "") -> str:
         """只有「此刻」的一段上下文：今天这份日程还没生成时用（凌晨那段）。
 
         写法贴着角色去说事 —— 不列字段、不下硬命令，只交代她在哪、什么状态、
         被打断是什么感觉，剩下的交给她自己。
         """
-        activity = activity_zh((life_state or {}).get("current_activity", ""))
+        activity = activity_zh((life_state or {}).get("current_activity", ""), title)
         place = location_zh((life_state or {}).get("location", ""))
         mood = mood_zh((life_state or {}).get("mood", ""))
         energy = self._energy_phrase((life_state or {}).get("energy"))
@@ -1879,7 +1885,8 @@ class MorningMusePlugin(Star):
                 lines.append("这会儿" + "，".join(bits) + "。")
         return "\n".join(lines)
 
-    def _format_for_injection(self, schedule: dict, life_state: dict = None) -> str:
+    def _format_for_injection(self, schedule: dict, life_state: dict = None,
+                              title: str = "") -> str:
         """把日程整理成一段上下文，交给本轮对话（不写 system_prompt）。
 
         - `inject.realtime_slice` 开着：按当前时刻切三刀（今天早些时候 / 此刻 / 接下来）。
@@ -1936,7 +1943,7 @@ class MorningMusePlugin(Star):
         # 优先级对调：状态机才是「真·此刻」，日程那条降级成「原本的打算」。
         # 日程是早上一次写死的，状态机每小时都在动；不这样的话会出现
         # 「日程写着在外面玩、人其实早窝回家里了」这种对不上。
-        cur_act = activity_zh((life_state or {}).get("current_activity", ""))
+        cur_act = activity_zh((life_state or {}).get("current_activity", ""), title)
         if cur_act:
             if here:
                 # 两行平视：状态机给的是「现在」，日程正文是「今天排的」——

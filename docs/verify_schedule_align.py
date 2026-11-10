@@ -10,7 +10,7 @@
 
 检查内容（对应 CHANGELOG v1.5.11）：
     ① 兜底归一：地点/活动的中文、英文变体、缺字段、超 3 个节拍
-    ② 节拍分摊：1 个铺满 3 格 / 2 个 2+1 / 3 个一格一个
+    ② 节拍分摊：1 个铺满 / 2 个铺 3 格→2+1 / 3 个一格一个
     ③ 铺格子：到点的时段真的写进了 planner 的活动表
     ④ 提前铺未来时段、跳过已经过完的时段
     ⑤ 睡眠让路：睡眠窗口里的小时不铺（归「睡眠硬接管」管）
@@ -152,17 +152,21 @@ def main() -> int:
         sleep_hours = {h for h in range(24) if m._hour_in_sleep_window(PID, h)}
         print(f"  （真实时间 {real_hour} 点；睡眠窗口内的小时：{sorted(sleep_hours)}）")
 
-        PERIOD = [("清晨", 6), ("上午", 9), ("午间", 12), ("下午", 15), ("傍晚", 18), ("晚间", 21)]
+        # 时段起点/段长一律从插件里取（2026-11-10 起跟显示口径同一把尺），不在这儿写死
+        from core.life_bridge import _PERIOD_HOUR, _PERIOD_SPAN
+
+        PERIOD = [(nm, _PERIOD_HOUR[nm], _PERIOD_SPAN[nm])
+                  for nm in ("清晨", "上午", "午间", "下午", "傍晚", "晚间")]
         target = None
-        for nm, st in PERIOD:              # 优先当前时段
-            if st <= real_hour < st + 3:
-                target = (nm, st); break
+        for nm, st, sp in PERIOD:          # 优先当前时段
+            if st <= real_hour < st + sp:
+                target = (nm, st, sp); break
         if target is None:                 # 否则第一个未来的
-            for nm, st in PERIOD:
+            for nm, st, sp in PERIOD:
                 if st > real_hour:
-                    target = (nm, st); break
-        name, st = target
-        expect = [h for h in (st, st + 1, st + 2) if h >= real_hour and h not in sleep_hours]
+                    target = (nm, st, sp); break
+        name, st, sp = target
+        expect = [h for h in range(st, st + sp) if h >= real_hour and h not in sleep_hours]
 
         print(f"\n③ 铺格子（目标时段「{name}」，预计可铺 {expect}）")
         items = [{"time": name, "activity": "…", "location": "library",
@@ -183,7 +187,7 @@ def main() -> int:
             s0 = plan.get_slot_for_hour(expect[0])
             # 节拍是摊在 start/+1/+2 三格上的，当前时刻可能已经吃掉前几格，
             # 所以要按偏移量取「这一格本来该铺哪一拍」，不能写死第一拍
-            spread = LifeBridgeManager._spread_beats(items[0]["beats"], 3)
+            spread = LifeBridgeManager._spread_beats(items[0]["beats"], sp)
             want = str(spread[min(expect[0] - st, len(spread) - 1)].get("do") or "").strip()
             check("真的写进了活动表", s0 is not None and s0.activity_name == want,
                   f"{getattr(s0, 'activity_name', '?')} @ {getattr(s0, 'location', '?')}"
@@ -196,7 +200,7 @@ def main() -> int:
         check("清晨（已过完）没被铺", (real_hour < 6) or not t_passed, str(t_passed))
 
         print("\n⑤ 睡眠让路（把目标时段的 3 格全标成睡眠小时 → 应该一格都不铺）")
-        t_sleep = LifeBridgeManager._align_sync(svc, items, real_hour, {st, st + 1, st + 2})
+        t_sleep = LifeBridgeManager._align_sync(svc, items, real_hour, set(range(st, st + sp)))
         check("睡眠小时的格被让开", not t_sleep, str(t_sleep))
 
         print("\n⑥ 自动注册（词表外的地名）")

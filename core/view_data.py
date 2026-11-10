@@ -19,7 +19,14 @@ import datetime
 
 from astrbot.api import logger
 
-from .life_bridge import activity_zh, energy_zh, location_zh, mood_zh
+from .life_bridge import (
+    activity_zh,
+    energy_zh,
+    location_zh,
+    mood_zh,
+    page_title,
+)
+from .life_bridge import period_index_of as _period_index_of
 from .schedule_text import period_emoji, place_text, strip_legacy_period_prefix
 from .state_store import StateStore
 
@@ -42,22 +49,8 @@ _SWITCHES = (
 
 
 def period_index_of(hour: int) -> int:
-    """把 0~23 点钟映射到六个时段的第几段。
-
-    凌晨（<4 点）归到前一晚的「晚间」——深夜聊天时她该在收尾，不是新的一天刚开始。
-    """
-    try:
-        hour = int(hour)
-    except (TypeError, ValueError):
-        hour = 12
-    if hour < 4:
-        return 5
-    bounds = [4, 8, 11, 13, 17, 19]
-    idx = 0
-    for i, b in enumerate(bounds):
-        if hour >= b:
-            idx = i
-    return idx
+    """钟点 → 六个时段的第几段。**口径在 life_bridge.period_index_of**（唯一出处），这里只转调。"""
+    return _period_index_of(hour)
 
 
 def _schedule_path(plugin, persona_id: str, day):
@@ -239,7 +232,7 @@ def in_sleep_window(plugin, persona_id: str) -> bool:
         return False
 
 
-def _display_of(live) -> dict:
+def _display_of(live, title: str = "") -> dict:
     """状态机的原始码 → 页面直接能显示的中文。没有状态就返回空 dict。"""
     if not live:
         return {}
@@ -255,7 +248,7 @@ def _display_of(live) -> dict:
         "energy_base": live.get("energy"),
         "energy_label": energy_zh(live.get("energy_label", "")),
         "location": location_zh(live.get("location", "")),
-        "activity": activity_zh(live.get("current_activity", "")),
+        "activity": activity_zh(live.get("current_activity", ""), title),
         "mood": mood_zh(live.get("mood", "")),
         "mood_intensity": live.get("mood_intensity"),
         "thought": live.get("thought", ""),
@@ -274,6 +267,7 @@ async def collect_status(plugin, persona_id: str) -> dict:
     life_on = bool(plugin.get_config("life_engine.enabled", False))
     out = {
         "persona_id": persona_id,
+        "user_title": page_title(plugin, persona_id),
         "sleeping": False,
         "enabled": bool(life_on and plugin.life_bridge is not None),
         "live": None,
@@ -297,7 +291,7 @@ async def collect_status(plugin, persona_id: str) -> dict:
             logger.warning(f"[晨光心语] {persona_id} 读取状态失败: {e}")
         # 给页面用的中文版：状态机吐的是 park / content / resting 这种码，
         # 命令侧一直靠 activity_zh() 这些翻译，页面也走同一套，别让两边口径跑偏。
-        out["live_display"] = _display_of(out["live"])
+        out["live_display"] = _display_of(out["live"], page_title(plugin, persona_id))
         try:
             out["shares"] = await plugin.life_bridge.shareable(persona_id, limit=3)
         except Exception:
@@ -659,7 +653,7 @@ def render_status_text(data: dict) -> str:
             f"心情：{mood_zh(live.get('mood', ''))}（强度 {live.get('mood_intensity')}）"
         )
         if live.get("current_activity"):
-            lines.append(f"此刻在做：{activity_zh(live['current_activity'])}")
+            lines.append(f"此刻在做：{activity_zh(live['current_activity'], data.get('user_title', ''))}")
         if live.get("location"):
             lines.append(f"所在：{location_zh(live['location'])}")
         if live.get("goals"):

@@ -52,7 +52,7 @@ import aiofiles
 
 from astrbot.api import logger
 
-from .life_bridge import _LOCATION_ZH
+from .life_bridge import _LOCATION_ZH, _PERIOD_HOUR
 from .storage import ScheduleStorage
 from .view_data import PERIOD_ORDER, period_index_of, schedule_time_of
 
@@ -62,9 +62,10 @@ _LOCATION_KEY = {}
 for _k, _v in _LOCATION_ZH.items():
     _LOCATION_KEY.setdefault(str(_v).strip(), _k)
 
-# 六个时段与「一天里大约几点开始」的对照（跟 life_bridge._PERIOD_HOUR 同一个口径）。
+# 六个时段的起始钟点 —— **直接跟随** life_bridge._PERIOD_HOUR（唯一出处），不在这儿另写一份。
+# 以前这里写 6/9/12/15/18/21、life_bridge 写另一套，来回换会串格（2026-11-10 统一）。
 # 只用来把时段名换成钟点写进文件，供排查和状态机换算；**判断一律走时段名**。
-PERIOD_START_HOUR = {"清晨": 6, "上午": 9, "午间": 12, "下午": 15, "傍晚": 18, "晚间": 21}
+PERIOD_START_HOUR = dict(_PERIOD_HOUR)
 
 # 注入里给「被补丁覆盖的那几格」加的那行淡注。
 OVERRIDE_NOTE = "（这一段是刚在聊天里说好的，不是早上就排好的）"

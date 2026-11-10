@@ -300,16 +300,13 @@ class ProactiveEngine:
         return dt.isoformat(timespec="seconds")
 
     def _period_now(self, now: datetime) -> str:
-        """按当前钟点认出是六个时段里的哪一个（跟注入口径一致）。"""
-        hour = now.hour
-        if hour < 4:
+        """按当前钟点认出是六个时段里的哪一个 —— 口径走 life_bridge.period_index_of。"""
+        from .life_bridge import PERIOD_ORDER, period_index_of
+
+        try:
+            return PERIOD_ORDER[period_index_of(now.hour)]
+        except Exception:
             return "晚间"
-        bounds = [4, 8, 11, 13, 17, 19]
-        idx = 0
-        for i, b in enumerate(bounds):
-            if hour >= b:
-                idx = i
-        return _PERIOD_ORDER[idx] if 0 <= idx < len(_PERIOD_ORDER) else "晚间"
 
     async def _schedule_now(self, persona_id: str) -> str:
         """她此刻那一格日程（拿来当「她现在在做什么」的背景）。"""

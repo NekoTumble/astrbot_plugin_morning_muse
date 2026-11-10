@@ -41,14 +41,37 @@ except ImportError:  # 没装上也不该拖垮插件
     _HAS_AURA = False
     logger.warning("[晨光心语] ⚠️ 未安装 aura-life，内在状态机（Phase 1）不可用，已自动降级")
 
-# 我们自己的 6 个模糊时段 ↔ 一天中的整点（和 weather_client.period_map 同一套）
+# ── 时段 ↔ 钟点：**全仓唯一出处**（2026-11-10 统一，此前有五份抄本互相打架）──
+# 定稿口径（主人 2026-11-10 拍板）：清晨 6 点起、上午 9 点起、午间 12、
+# 下午 14、傍晚 18（天开始暗）、晚间 21（压在她睡前）。6 点前算前一晚的夜里。
+# 页面高亮、状态机接管、工具时段范围、主动消息、天气取样，全部读这里，别再各写一份。
+PERIOD_ORDER = ("清晨", "上午", "午间", "下午", "傍晚", "晚间")
+_PERIOD_HOUR = {"清晨": 6, "上午": 9, "午间": 12, "下午": 14, "傍晚": 18, "晚间": 21}
+_PERIOD_SPAN = {"清晨": 3, "上午": 3, "午间": 2, "下午": 4, "傍晚": 3, "晚间": 3}
+_FIRST_PERIOD_HOUR = 6
+
+
+def period_index_of(hour: int) -> int:
+    """钟点 → 六个时段的第几段（0~5）。**6 点前算前一晚的「晚间」**。
+
+    全仓只有这一份实现；view_data / schedule_override / proactive 都转调它。
+    """
+    try:
+        h = int(hour)
+    except (TypeError, ValueError):
+        h = 12
+    if h < _FIRST_PERIOD_HOUR:
+        return 5
+    idx = 0
+    for i, name in enumerate(PERIOD_ORDER):
+        if h >= _PERIOD_HOUR[name]:
+            idx = i
+    return idx
+
+# 取样用：每个时段取「段中间那个整点」，用来把状态机的逐小时计划折成六段人话。
+# 从 _PERIOD_HOUR/_PERIOD_SPAN 派生，别在这儿另写一份（2026-11-10 统一）。
 PERIOD_SLOTS = [
-    ("清晨", 6),
-    ("上午", 9),
-    ("午间", 12),
-    ("下午", 15),
-    ("傍晚", 18),
-    ("晚间", 21),
+    (name, _PERIOD_HOUR[name] + _PERIOD_SPAN[name] // 2) for name in PERIOD_ORDER
 ]
 
 # aura-life 的 hook 是模块级全局的，只配置一次
@@ -93,8 +116,6 @@ def _parse_plan(schedule_text: str) -> dict[int, str]:
 
 
 # ── Step 1：日程 → 状态机 · 回灌的规则表 ──
-# 六个时段各从几点算「到点」（和 weather_client.period_map、PERIOD_SLOTS 同一套）
-_PERIOD_HOUR = {"清晨": 6, "上午": 9, "午间": 12, "下午": 15, "傍晚": 18, "晚间": 21}
 
 # (关键词, 映射到的活动名, 允许出现的时段标签)
 # 只收录「一眼就能确定」的说法；拿不准的一律不进表 —— 宁可少做，不可乱做。
@@ -159,7 +180,8 @@ _ACTIVITY_ZH = {
     "watching the snow fall": "看雪",
     "watching sunset": "看日落",
     "daydreaming": "发呆",
-    "thinking about user": "想着主人",
+    # {user} 会被换成「她怎么叫你」（配置项 addressing）；留空就退成「人」
+    "thinking about user": "心里惦记着{user}",
     "remembering happy moments": "回忆开心的事",
     "preparing something to share": "准备想跟你说的事",
     "texting a friend": "跟朋友发消息",
@@ -188,12 +210,50 @@ _ACTIVITY_ZH = {
 }
 
 
-def activity_zh(name: str) -> str:
-    """把状态机的英文活动名翻成中文；没收录的原样返回。"""
+def activity_zh(name: str, title: str = "") -> str:
+    """把状态机的英文活动名翻成中文；没收录的原样返回。
+
+    `title` = 她怎么叫你（配置项 addressing）。只有带 {user} 的那几条会用到它；
+    留空就退成「人」——注入那段是第二人称写给她的，用「你」会变成她想自己。
+    """
     if not name:
         return ""
     raw = str(name).strip()
-    return _ACTIVITY_ZH.get(raw.lower(), raw)
+    val = _ACTIVITY_ZH.get(raw.lower(), raw)
+    if "{user}" in val:
+        val = val.replace("{user}", str(title or "").strip() or "人")
+    return val
+
+
+def user_title(plugin, persona_id: str) -> str:
+    """她怎么叫你：配置项 `addressing` 里按人格名查（人格名 → 称呼）。没配就是空串。"""
+    try:
+        table = plugin.get_config("addressing", {}) or {}
+        if not isinstance(table, dict):
+            return ""
+        pid = str(persona_id or "").strip()
+        for k, v in table.items():
+            if str(k or "").strip() == pid:
+                return str(v or "").strip()
+        return ""
+    except Exception:
+        return ""
+
+
+def page_title(plugin, persona_id: str) -> str:
+    """页面、`/状态` 用的称呼：没配就退成「你」（页面本来就是对着主人说话）。"""
+    return user_title(plugin, persona_id) or "你"
+
+
+def inject_title(plugin, persona_id: str) -> str:
+    """注入用称呼：没配、或填了「你/我」→ 空（activity_zh 会退成「人」）。
+
+    注入那段是第二人称写给她的（"你在厨房"），称呼里带「你」会变成「想着你自己」。
+    """
+    t = user_title(plugin, persona_id)
+    if not t or any(w in t for w in ("你", "我")):
+        return ""
+    return t
 
 
 # 心情是 aura-life 的 affect 系统给的五个词：neutral / content / blue / raw / restless。
@@ -1373,13 +1433,14 @@ class LifeBridgeManager:
             start = _PERIOD_HOUR.get(slot_label)
             if start is None:
                 continue
-            if now_hour >= start + 3:
+            span = _PERIOD_SPAN.get(slot_label, 3)
+            if now_hour >= start + span:
                 continue  # 这个时段已经整体过去了，别白费调用（也免得刷日志）
             loc = str(item.get("location") or "").strip() or "home"
             beats = item.get("beats")
             if not isinstance(beats, list) or not beats:
                 beats = [{"do": "", "at": loc}]
-            spread = LifeBridgeManager._spread_beats(beats, 3)
+            spread = LifeBridgeManager._spread_beats(beats, span)
             for offset, entry in enumerate(spread):
                 hour = start + offset
                 if hour > 23 or hour in skip or hour < real_hour:
@@ -1400,15 +1461,22 @@ class LifeBridgeManager:
 
     @staticmethod
     def _spread_beats(beats: list, n: int = 3) -> list[dict]:
-        """把 1~3 个节拍摊到 n 个格子里（1 个→全铺；2 个→2+1；3 个→一格一个）。"""
+        """把 1~3 个节拍摊到 n 个格子里（n = 这个时段的整点数，2~5 不等）。
+
+        每个节拍至少占一格，多出来的格子从前往后加 —— 于是：
+        1 个→全铺；2 个铺 3 格→2+1；3 个铺 5 格→2+2+1；节拍比格子多就截断。
+        """
+        n = max(1, int(n))
         bs = [b for b in beats if isinstance(b, dict)][:3]
         if not bs:
             return [{} for _ in range(n)]
-        if len(bs) == 1:
-            return [bs[0]] * n
-        if len(bs) == 2:
-            return [bs[0], bs[0], bs[1]][:n]
-        return bs[:n]
+        out = []
+        for i, b in enumerate(bs):
+            remain_slots = n - len(out)
+            remain_beats = len(bs) - i
+            take = max(1, round(remain_slots / remain_beats))
+            out.extend([b] * take)
+        return out[:n]
 
     @staticmethod
     def _ensure_location(svc, key: str) -> None:
