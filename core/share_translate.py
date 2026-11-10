@@ -36,7 +36,7 @@ from pathlib import Path
 from astrbot.api import logger
 
 CACHE_NAME = "share_zh.json"
-CACHE_VER = 2              # 翻译提示词变了就 +1，旧译文会被当成"待翻"重写
+CACHE_VER = 3              # 翻译提示词变了就 +1，旧译文会被当成"待翻"重写
 DEFAULT_BATCH = 40          # 一次发给模型多少条（别太大，回包好解析）
 MAX_SCAN = 600              # 一轮最多扫多少条待翻（首次回填靠循环补完）
 MAX_TEXT = 300              # 单条超长就截断（翻译用不着全文）
@@ -185,6 +185,8 @@ _PROMPT = """你在替一个角色，把她今天记下的英文生活片段改�
 要求：
 - 一句对一句，**保留原来的意思和细节**，不扩写、不合并、不加解释
 - 用她的口吻：第一人称或省略主语，**绝对不要用「她」**；口语、短句，不要翻译腔和书面语
+- 上面那份设定只是让你抓语感：**不要出现设定里的任何专有名词、人名、地名、情节或描写**，
+  也不要把设定里的句子搬进来；译文只讲下面这些英文句子本身说的事
 - 只输出一个 JSON 数组，元素是字符串，顺序与输入完全一致
 - 不要输出任何多余文字、不要 markdown 代码块
 
@@ -245,7 +247,7 @@ async def _call(provider, model: str, prompt: str) -> str:
         return ""
 
 
-MAX_PERSONA = 1200          # 人格提示词截断长度（够抓语气，别把整份塞进去）
+MAX_PERSONA = 0             # 0 = 不截断，人格提示词原样给（不同人格的设定差很多，截了会丢语气）
 
 
 async def _voice_of(plugin, persona_id: str) -> str:
@@ -277,7 +279,8 @@ async def _voice_of(plugin, persona_id: str) -> str:
             text = str(plugin.get_style_for_persona(persona_id) or "").strip()
         except Exception:
             text = ""
-    text = text[:MAX_PERSONA]
+    if MAX_PERSONA > 0:
+        text = text[:MAX_PERSONA]
     cache[persona_id] = text
     return text
 
@@ -301,7 +304,7 @@ async def translate_items(plugin, items: list[tuple[str, str]],
     for pid, texts in grouped.items():
         voice = await _voice_of(plugin, pid)
         style_line = (
-            "\n她的角色设定（**只学语气、口癖和用词习惯**，不要照抄设定里的任何情节或描写）：\n"
+            "\n她的角色设定（**只用来学语感、口癖、用词习惯**；不许把设定里的名词、情节、描写写进译文）：\n"
             + voice
         ) if voice else ""
         for i in range(0, len(texts), max(1, batch)):
